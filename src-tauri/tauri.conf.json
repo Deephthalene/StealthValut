@@ -1,0 +1,26 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "StealthVault",
+  "version": "0.1.0",
+  "identifier": "com.stealthvault.app",
+  "build": {
+    "beforeDevCommand": "npm run dev --prefix frontend",
+    "devUrl": "http://localhost:5174",
+    "beforeBuildCommand": "npm run build --prefix frontend",
+    "frontendDist": "../frontend/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "StealthVault",
+        "width": 900,
+        "height": 650,
+        "minWidth": 600,
+        "minHeight": 400
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  }
+}

@@ -1,0 +1,46 @@
+# ============================================
+# Cargo.toml - Rust 패키지 설정 파일
+# npm의 package.json과 비슷한 역할
+# ============================================
+
+[package]
+name = "stealthvault"
+version = "0.1.0"
+description = "로컬 암호화 파일 금고"
+authors = ["StealthVault"]
+edition = "2021"
+rust-version = "1.70"
+
+[lib]
+# 라이브러리로 빌드 (Tauri가 이걸 사용)
+name = "stealthvault_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+# 빌드 시점에 실행되는 스크립트용 (tauri.conf.json 등 읽음)
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# --- Tauri (데스크톱 앱 프레임워크) ---
+tauri = { version = "2", features = [] }        # 핵심: React UI를 네이티브 창에 띄움
+tauri-plugin-fs = "2"                           # 파일 시스템 접근 (나중에 파일 입출고용)
+tauri-plugin-dialog = "2"                       # 파일 선택 다이얼로그
+tauri-plugin-shell = "2"                        # 외부 프로그램 실행 (나중에 파일 열기용)
+
+# --- JSON 직렬화 ---
+serde = { version = "1", features = ["derive"] }  # 구조체 ↔ JSON 변환
+serde_json = "1"                                  # JSON 파싱
+
+# --- 보안/암호화 ---
+argon2 = "0.5"      # 비밀번호 해시 (KDF) - 평문 비밀번호를 저장하지 않기 위함
+aes-gcm = "0.10"    # 파일 암호화 (다음 단계에서 사용)
+rand = "0.8"        # 난수 생성 (복구 키, Nonce 등)
+base64 = "0.21"     # Base64 인코딩 (복구 키를 문자열로)
+
+# --- 저장소 ---
+rusqlite = { version = "0.31", features = ["bundled"] }  # SQLite DB (파일 메타데이터용)
+uuid = { version = "1", features = ["v4"] }             # 폴더/파일 ID 생성
+
+# --- 시스템 정보 ---
+sysinfo = "0.30"    # 디스크 용량 조회
+dirs = "5"          # OS별 기본 경로 (AppData, Documents 등)
