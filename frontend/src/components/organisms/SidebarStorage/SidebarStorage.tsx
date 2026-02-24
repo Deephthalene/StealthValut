@@ -15,6 +15,12 @@ function isTauriEnv(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
 
+const VAULT_FILES_CHANGED = 'vault-files-changed';
+
+export function dispatchVaultFilesChanged() {
+  window.dispatchEvent(new CustomEvent(VAULT_FILES_CHANGED));
+}
+
 export default function SidebarStorage() {
   const [quota, setQuota] = useState<QuotaResult | null>(null);
 
@@ -29,6 +35,9 @@ export default function SidebarStorage() {
       }
     };
     load();
+    const onChanged = () => load();
+    window.addEventListener(VAULT_FILES_CHANGED, onChanged);
+    return () => window.removeEventListener(VAULT_FILES_CHANGED, onChanged);
   }, []);
 
   if (!quota) return null;

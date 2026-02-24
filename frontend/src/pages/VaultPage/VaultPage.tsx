@@ -1,7 +1,22 @@
+import { dispatchVaultFilesChanged } from '@/components/organisms/SidebarStorage/SidebarStorage';
 import { useVaultFolderStore } from '@/stores/useVaultFolderStore';
 import { invoke } from '@tauri-apps/api/core';
-import { Folder, FolderPlus, Upload } from 'lucide-react';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { open, save } from '@tauri-apps/plugin-dialog';
+import {
+  Download,
+  File,
+  FileAudio,
+  FileImage,
+  FileText,
+  FileVideo,
+  Folder,
+  FolderPlus,
+  Loader2,
+  Upload,
+} from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
+import { toast } from 'sonner';
 
 function isTauriEnv(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -14,27 +29,53 @@ interface FolderItem {
   created_at: number;
 }
 
+interface FileItem {
+  id: string;
+  original_name: string;
+  size_bytes: number;
+  created_at: number;
+  file_kind: 'image' | 'video' | 'audio' | 'document' | 'other';
+  thumbnail_base64?: string;
+}
+
 function VaultPage() {
   const { selectedFolderId, setSelectedFolderId } = useVaultFolderStore();
   const [folders, setFolders] = useState<FolderItem[]>([]);
+  const [files, setFiles] = useState<FileItem[]>([]);
   const [allFolders, setAllFolders] = useState<FolderItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{
+    current: number;
+    total: number;
+  } | null>(null);
+  const [exportingId, setExportingId] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState('');
+  const [isDragOver, setIsDragOver] = useState(false);
 
   const load = useCallback(async () => {
-    if (!isTauriEnv()) return;
+    if (!isTauriEnv()) {
+      setLoading(false);
+      return;
+    }
     try {
-      const [children, all] = await Promise.all([
+      const [children, fileList, all] = await Promise.all([
         invoke<FolderItem[]>('list_folders', {
           parentId: selectedFolderId || undefined,
+        }),
+        invoke<FileItem[]>('list_files', {
+          folderId: selectedFolderId || undefined,
         }),
         invoke<FolderItem[]>('list_all_folders'),
       ]);
       setFolders(children);
+      setFiles(fileList);
       setAllFolders(all);
     } catch {
       setFolders([]);
+      setFiles([]);
       setAllFolders([]);
     } finally {
       setLoading(false);
@@ -45,6 +86,69 @@ function VaultPage() {
     setLoading(true);
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (!isTauriEnv()) return;
+    let unlisten: (() => void) | undefined;
+    getCurrentWindow()
+      .onDragDropEvent((event) => {
+        const t = event.payload.type;
+        if (t === 'enter' || t === 'over') setIsDragOver(true);
+        else setIsDragOver(false);
+
+        if (t === 'drop' && event.payload.paths?.length) {
+          const paths = event.payload.paths as string[];
+          setUploadError('');
+          setUploading(true);
+          setUploadProgress({ current: 0, total: paths.length });
+          let done = 0;
+          Promise.allSettled(
+            paths.map((p) =>
+              invoke('vault_move_file', {
+                sourcePath: p,
+                folderId: selectedFolderId || undefined,
+              }).then(() => {
+                done += 1;
+                setUploadProgress((prev) =>
+                  prev ? { ...prev, current: done } : null,
+                );
+              }),
+            ),
+          )
+            .then((results) => {
+              const errors = results
+                .filter(
+                  (r): r is PromiseRejectedResult => r.status === 'rejected',
+                )
+                .map((r) => r.reason);
+              const ok = results.filter((r) => r.status === 'fulfilled').length;
+              if (errors.length === 0) {
+                setUploadError('');
+                if (ok) toast.success(`${ok}개 파일 업로드 완료`);
+              } else {
+                setUploadError(
+                  errors[0] instanceof Error
+                    ? errors[0].message
+                    : String(errors[0]),
+                );
+                toast.error(errors[0]?.toString?.() ?? '업로드 실패');
+                if (ok) toast.success(`${ok}개 파일 업로드 완료`);
+              }
+            })
+            .finally(() => {
+              load().then(dispatchVaultFilesChanged);
+              setUploading(false);
+              setUploadProgress(null);
+            });
+        }
+      })
+      .then((fn) => {
+        unlisten = fn;
+      });
+    return () => {
+      unlisten?.();
+    };
+  }, [load, selectedFolderId]);
 
   const breadcrumb: FolderItem[] = (() => {
     if (!selectedFolderId) return [];
@@ -60,6 +164,40 @@ function VaultPage() {
     }
     return path;
   })();
+
+  const handleUpload = async () => {
+    setUploadError('');
+    try {
+      const selected = await open({
+        multiple: true,
+        directory: false,
+        title: '이동할 파일 선택 (원본은 삭제됩니다)',
+      });
+      if (!selected) return;
+      const paths = Array.isArray(selected) ? selected : [selected];
+      setUploading(true);
+      setUploadProgress({ current: 0, total: paths.length });
+      let done = 0;
+      for (const p of paths) {
+        await invoke('vault_move_file', {
+          sourcePath: p,
+          folderId: selectedFolderId || undefined,
+        });
+        done += 1;
+        setUploadProgress({ current: done, total: paths.length });
+      }
+      toast.success(`${paths.length}개 파일 업로드 완료`);
+      await load();
+      dispatchVaultFilesChanged();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setUploadError(msg);
+      toast.error(msg);
+    } finally {
+      setUploading(false);
+      setUploadProgress(null);
+    }
+  };
 
   const handleCreateFolder = async () => {
     const name = newName.trim();
@@ -81,6 +219,49 @@ function VaultPage() {
     }
   };
 
+  const handleExport = async (file: FileItem) => {
+    setExportingId(file.id);
+    setUploadError('');
+    try {
+      const dest = await save({
+        title: '내보낼 위치 선택 (금고에서 삭제됩니다)',
+        defaultPath: file.original_name,
+      });
+      if (!dest) return;
+      await invoke('vault_extract_file', {
+        fileId: file.id,
+        destPath: dest,
+      });
+      toast.success('내보내기 완료');
+      await load();
+      dispatchVaultFilesChanged();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setUploadError(msg);
+      toast.error(msg);
+    } finally {
+      setExportingId(null);
+    }
+  };
+
+  const handleFileDragStart = async (e: React.DragEvent, file: FileItem) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (exportingId) return;
+    try {
+      const tempPath = await invoke<string>('vault_prepare_drag_out', {
+        fileId: file.id,
+      });
+      const { startDrag } = await import('@crabnebula/tauri-plugin-drag');
+      await startDrag({ item: [tempPath], icon: tempPath });
+      await invoke('vault_confirm_drag_out', { fileId: file.id });
+      await load();
+      dispatchVaultFilesChanged();
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   if (!isTauriEnv()) {
     return (
       <div className="p-8 text-destructive">
@@ -89,8 +270,36 @@ function VaultPage() {
     );
   }
 
+  const showProgress =
+    uploading ||
+    (exportingId !== null && files.some((f) => f.id === exportingId));
+
   return (
-    <div className="flex flex-col h-full min-h-0">
+    <div className="flex flex-col h-full min-h-0 relative">
+      {showProgress && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm rounded-lg">
+          <div className="flex flex-col items-center gap-3 px-6 py-4 rounded-lg bg-card border shadow-lg">
+            <Loader2 size={32} className="animate-spin text-primary" />
+            <p className="text-sm font-medium">
+              {uploading
+                ? uploadProgress
+                  ? `업로드 중... ${uploadProgress.current}/${uploadProgress.total}`
+                  : '업로드 중...'
+                : '내보내는 중...'}
+            </p>
+            {uploadProgress && (
+              <div className="w-48 h-1.5 bg-muted rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-primary transition-all"
+                  style={{
+                    width: `${(uploadProgress.current / uploadProgress.total) * 100}%`,
+                  }}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       {/* 브레드크럼 + 툴바 */}
       <div className="flex-shrink-0 mb-4">
         <nav className="flex items-center gap-1 text-sm text-muted-foreground mb-3">
@@ -114,6 +323,9 @@ function VaultPage() {
             </span>
           ))}
         </nav>
+        {uploadError && (
+          <p className="text-sm text-rose-400 mb-2">{uploadError}</p>
+        )}
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -124,10 +336,22 @@ function VaultPage() {
           </button>
           <button
             type="button"
-            className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border text-sm hover:bg-accent"
+            onClick={handleUpload}
+            disabled={uploading}
+            aria-busy={uploading}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border text-sm hover:bg-accent disabled:opacity-50"
           >
-            <Upload size={16} />
-            업로드
+            {uploading ? (
+              <>
+                <Loader2 size={16} className="animate-spin" />
+                업로드 중...
+              </>
+            ) : (
+              <>
+                <Upload size={16} />
+                업로드 (이동)
+              </>
+            )}
           </button>
         </div>
       </div>
@@ -162,12 +386,16 @@ function VaultPage() {
       )}
 
       {/* 콘텐츠 그리드 */}
-      <div className="flex-1 min-h-0 overflow-auto">
+      <div
+        className={`flex-1 min-h-0 overflow-auto rounded-lg transition-colors ${
+          isDragOver ? 'ring-2 ring-primary bg-primary/5' : ''
+        }`}
+      >
         {loading ? (
           <div className="py-12 text-center text-muted-foreground text-sm">
             로딩 중...
           </div>
-        ) : folders.length === 0 && !creating ? (
+        ) : folders.length === 0 && files.length === 0 && !creating ? (
           <div className="py-16 text-center text-muted-foreground text-sm border border-dashed border-border rounded-lg">
             <Folder size={40} className="mx-auto mb-2 opacity-50" />
             <p>이 폴더가 비어 있습니다</p>
@@ -176,20 +404,94 @@ function VaultPage() {
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
             {folders.map((f) => (
               <button
                 key={f.id}
                 type="button"
-                className="flex flex-col items-center gap-2 p-4 rounded-lg border border-border hover:bg-accent/50 text-left w-full"
+                className="group flex flex-col rounded-xl border border-border hover:border-primary/30 hover:shadow-md transition-all text-left w-full overflow-hidden"
                 onClick={() => setSelectedFolderId(f.id)}
               >
-                <Folder size={40} className="text-amber-500" />
-                <span className="text-sm font-medium truncate w-full text-center">
-                  {f.name}
-                </span>
+                <div className="flex items-center justify-center aspect-square bg-accent/30 group-hover:bg-accent/50 transition-colors">
+                  <Folder size={48} className="text-amber-500" />
+                </div>
+                <div className="px-3 py-2.5">
+                  <p className="text-sm font-medium truncate">{f.name}</p>
+                </div>
               </button>
             ))}
+            {files.map((file) => {
+              const Icon =
+                file.file_kind === 'image'
+                  ? FileImage
+                  : file.file_kind === 'video'
+                    ? FileVideo
+                    : file.file_kind === 'audio'
+                      ? FileAudio
+                      : file.file_kind === 'document'
+                        ? FileText
+                        : File;
+              const iconColor =
+                file.file_kind === 'image'
+                  ? 'text-emerald-500'
+                  : file.file_kind === 'video'
+                    ? 'text-rose-500'
+                    : file.file_kind === 'audio'
+                      ? 'text-violet-500'
+                      : file.file_kind === 'document'
+                        ? 'text-amber-500'
+                        : 'text-sky-500';
+              const sizeLabel =
+                file.size_bytes >= 1048576
+                  ? `${(file.size_bytes / 1048576).toFixed(1)} MB`
+                  : `${(file.size_bytes / 1024).toFixed(1)} KB`;
+              return (
+                <div
+                  key={file.id}
+                  draggable
+                  onDragStart={(e) => handleFileDragStart(e, file)}
+                  className="group relative flex flex-col rounded-xl border border-border hover:border-primary/30 hover:shadow-md transition-all cursor-grab active:cursor-grabbing overflow-hidden"
+                >
+                  <div className="relative aspect-square bg-accent/20 flex items-center justify-center overflow-hidden">
+                    {file.thumbnail_base64 ? (
+                      <img
+                        src={`data:image/jpeg;base64,${file.thumbnail_base64}`}
+                        alt=""
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <Icon size={48} className={iconColor} />
+                    )}
+                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleExport(file);
+                        }}
+                        disabled={exportingId === file.id}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-white text-gray-800 shadow-lg opacity-0 group-hover:opacity-100 translate-y-1 group-hover:translate-y-0 transition-all disabled:opacity-50"
+                        title="내보내기 (금고에서 삭제)"
+                      >
+                        <Download size={13} />
+                        내보내기
+                      </button>
+                    </div>
+                  </div>
+                  <div className="px-3 py-2.5">
+                    <p
+                      className="text-sm font-medium truncate"
+                      title={file.original_name}
+                    >
+                      {file.original_name}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {sizeLabel}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>

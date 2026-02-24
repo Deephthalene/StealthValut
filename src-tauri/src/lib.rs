@@ -6,9 +6,12 @@
 mod crypto;
 mod db;
 mod folders;
+mod key_cache;
 mod quota;
 mod vault;
+mod vault_files;
 mod vault_location;
+mod thumbnails;
 
 use std::path::PathBuf;
 
@@ -90,6 +93,24 @@ fn vault_verify(password: String) -> Result<bool, String> {
     vault::vault_verify(&vault_base_path(), &password)
 }
 
+/// unlock 시 DEK 캐시 (파일 암호화용) + 1회 백필
+#[tauri::command]
+fn vault_cache_key(password: String) -> Result<(), String> {
+    vault::vault_cache_key(&vault_base_path(), &password)?;
+    let base = vault_base_path();
+    std::thread::spawn(move || {
+        let _ = vault_files::backfill_files_index(&base);
+    });
+    Ok(())
+}
+
+/// 잠금 시 DEK 제거
+#[tauri::command]
+fn vault_clear_key() -> Result<(), String> {
+    key_cache::clear_dek();
+    Ok(())
+}
+
 /// 복구 키로 금고 열기 (검증만)
 #[tauri::command]
 fn vault_verify_recovery_key(recovery_key: String) -> Result<bool, String> {
@@ -144,6 +165,69 @@ fn delete_folder(id: String) -> Result<(), String> {
     folders::delete_folder(&vault_base_path(), &id)
 }
 
+/// file:// URL 또는 일반 경로를 PathBuf로 변환 (드롭 시 Windows에서 file:/// 경로 올 수 있음)
+fn parse_file_path(s: &str) -> PathBuf {
+    let s = s.trim();
+    if s.starts_with("file://") {
+        if let Ok(u) = url::Url::parse(s) {
+            if let Ok(p) = u.to_file_path() {
+                return p;
+            }
+        }
+        let rest = s
+            .trim_start_matches("file:///")
+            .trim_start_matches("file://");
+        PathBuf::from(rest.replace('/', std::path::MAIN_SEPARATOR_STR))
+    } else {
+        PathBuf::from(s)
+    }
+}
+
+/// 파일 이동+암호화 (원본 삭제)
+#[tauri::command]
+fn vault_move_file(source_path: String, folder_id: Option<String>) -> Result<String, String> {
+    let path = parse_file_path(&source_path);
+    vault_files::vault_move_file(
+        &vault_base_path(),
+        path.as_path(),
+        folder_id.as_deref(),
+    )
+}
+
+/// 썸네일 없을 때 on-demand 생성
+#[tauri::command]
+fn get_file_thumbnail(file_id: String) -> Result<Option<String>, String> {
+    vault_files::get_or_create_thumbnail(&vault_base_path(), &file_id)
+}
+
+/// 폴더 내 파일 목록
+#[tauri::command]
+fn list_files(folder_id: Option<String>) -> Result<Vec<vault_files::FileItem>, String> {
+    vault_files::list_files(&vault_base_path(), folder_id.as_deref())
+}
+
+/// 파일 출고 (복호화 → 저장 → 금고에서 삭제)
+#[tauri::command]
+fn vault_extract_file(file_id: String, dest_path: String) -> Result<(), String> {
+    vault_files::vault_extract_file(
+        &vault_base_path(),
+        &file_id,
+        PathBuf::from(&dest_path).as_path(),
+    )
+}
+
+/// 드래그아웃 준비: 임시 복호화 경로 반환
+#[tauri::command]
+fn vault_prepare_drag_out(file_id: String) -> Result<String, String> {
+    vault_files::vault_prepare_drag_out(&vault_base_path(), &file_id)
+}
+
+/// 드래그 완료 후 금고에서 삭제
+#[tauri::command]
+fn vault_confirm_drag_out(file_id: String) -> Result<(), String> {
+    vault_files::vault_confirm_drag_out(&vault_base_path(), &file_id)
+}
+
 /// Tauri 앱 실행 - 플러그인 등록, invoke 핸들러 등록
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -151,6 +235,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_drag::init())
         .invoke_handler(tauri::generate_handler![
             check_quota,
             get_vault_path,
@@ -159,6 +244,8 @@ pub fn run() {
             vault_exists,
             vault_init,
             vault_verify,
+            vault_cache_key,
+            vault_clear_key,
             vault_verify_recovery_key,
             vault_reset_password,
             vault_reset,
@@ -166,7 +253,13 @@ pub fn run() {
             list_all_folders,
             create_folder,
             rename_folder,
-            delete_folder
+            delete_folder,
+            vault_move_file,
+            get_file_thumbnail,
+            list_files,
+            vault_extract_file,
+            vault_prepare_drag_out,
+            vault_confirm_drag_out
         ])
         .run(tauri::generate_context!())
         .expect("StealthVault 실행 실패");

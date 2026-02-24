@@ -46,8 +46,21 @@ pub fn init(base: &Path) -> Result<(), String> {
             FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE SET NULL
         );
         CREATE INDEX IF NOT EXISTS idx_files_created_at ON files(created_at DESC);
-        CREATE INDEX IF NOT EXISTS idx_files_mime_type ON files(mime_type);
         CREATE INDEX IF NOT EXISTS idx_files_folder ON files(folder_id);
+
+        CREATE TABLE IF NOT EXISTS files_index (
+            id TEXT PRIMARY KEY,
+            folder_id TEXT,
+            hash_name TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            thumbnail_blob BLOB,
+            created_at INTEGER NOT NULL,
+            file_kind TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_files_index_folder ON files_index(folder_id);
+        CREATE INDEX IF NOT EXISTS idx_files_index_created ON files_index(created_at DESC);
 
         CREATE TABLE IF NOT EXISTS vault_config (
             key TEXT PRIMARY KEY,
@@ -59,6 +72,7 @@ pub fn init(base: &Path) -> Result<(), String> {
     .map_err(|e| e.to_string())?;
 
     migrate_add_folder_id(base)?;
+    migrate_add_files_index(base)?;
 
     Ok(())
 }
@@ -83,7 +97,8 @@ pub fn ensure_schema(base: &Path) -> Result<(), String> {
         "#,
     )
     .map_err(|e| e.to_string())?;
-    migrate_add_folder_id(base)
+    migrate_add_folder_id(base)?;
+    migrate_add_files_index(base)
 }
 
 /// 기존 DB에 folder_id 컬럼 추가 (마이그레이션)
@@ -100,5 +115,28 @@ fn migrate_add_folder_id(base: &Path) -> Result<(), String> {
         conn.execute("ALTER TABLE files ADD COLUMN folder_id TEXT", [])
             .map_err(|e| e.to_string())?;
     }
+    Ok(())
+}
+
+fn migrate_add_files_index(base: &Path) -> Result<(), String> {
+    let conn = conn(base)?;
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS files_index (
+            id TEXT PRIMARY KEY,
+            folder_id TEXT,
+            hash_name TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            thumbnail_blob BLOB,
+            created_at INTEGER NOT NULL,
+            file_kind TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_files_index_folder ON files_index(folder_id);
+        CREATE INDEX IF NOT EXISTS idx_files_index_created ON files_index(created_at DESC);
+        "#,
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }

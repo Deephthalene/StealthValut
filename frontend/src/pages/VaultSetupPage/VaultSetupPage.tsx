@@ -150,9 +150,16 @@ export default function VaultSetupPage({ onComplete }: VaultSetupPageProps) {
     setStep('terms');
   };
 
-  const handleAgreeAndComplete = () => {
+  const handleAgreeAndComplete = async () => {
     if (!termsAgreed) return;
     setStep('done');
+    if (isTauriEnv() && password) {
+      try {
+        await invoke('vault_cache_key', { password });
+      } catch {
+        // DEK 캐시 실패 시에도 진행 (재로그인 필요할 수 있음)
+      }
+    }
     onComplete();
   };
 

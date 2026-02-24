@@ -47,6 +47,7 @@ export default function VaultUnlockPage({
         if (mode === 'password') {
           const ok = await invoke<boolean>('vault_verify', { password: value });
           if (ok) {
+            await invoke('vault_cache_key', { password: value });
             onUnlock();
           } else {
             setError('비밀번호가 올바르지 않습니다.');
@@ -90,6 +91,7 @@ export default function VaultUnlockPage({
           recoveryKey: recoveryKey.trim(),
           newPassword,
         });
+        await invoke('vault_cache_key', { password: newPassword });
         onUnlock();
       } else {
         onUnlock();
