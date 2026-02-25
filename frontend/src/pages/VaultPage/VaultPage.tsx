@@ -75,6 +75,7 @@ function VaultPage() {
   }, [goBack, goForward]);
   const [folders, setFolders] = useState<FolderItem[]>([]);
   const [files, setFiles] = useState<FileItem[]>([]);
+  const [filesTotal, setFilesTotal] = useState<number | null>(null);
   const [allFolders, setAllFolders] = useState<FolderItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -296,27 +297,34 @@ function VaultPage() {
     name: string;
   } | null>(null);
 
+  const PAGE_SIZE = 200;
+
   const load = useCallback(async () => {
     if (!isTauriEnv()) {
       setLoading(false);
       return;
     }
     try {
-      const [children, fileList, all] = await Promise.all([
+      const [children, paged, all] = await Promise.all([
         invoke<FolderItem[]>('list_folders', {
           parentId: selectedFolderId || undefined,
         }),
-        invoke<FileItem[]>('list_files', {
+        invoke<[FileItem[], number]>('list_files_paged', {
           folderId: selectedFolderId || undefined,
+          limit: PAGE_SIZE,
+          offset: 0,
         }),
         invoke<FolderItem[]>('list_all_folders'),
       ]);
+      const [fileList, total] = paged;
       setFolders(children);
       setFiles(fileList);
+      setFilesTotal(total);
       setAllFolders(all);
     } catch {
       setFolders([]);
       setFiles([]);
+      setFilesTotal(null);
       setAllFolders([]);
     } finally {
       setLoading(false);
@@ -325,6 +333,8 @@ function VaultPage() {
 
   useEffect(() => {
     setLoading(true);
+    setFiles([]);
+    setFilesTotal(null);
     load();
   }, [load]);
 
@@ -723,6 +733,33 @@ function VaultPage() {
     }
   };
 
+  const hasMoreFiles =
+    filesTotal !== null && files.length > 0 && files.length < filesTotal;
+
+  const [loadingMore, setLoadingMore] = useState(false);
+  const scrollParentRef = useRef<HTMLDivElement | null>(null);
+
+  const loadMoreFiles = useCallback(async () => {
+    if (!isTauriEnv() || !hasMoreFiles || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const [next, total] = await invoke<[FileItem[], number]>(
+        'list_files_paged',
+        {
+          folderId: selectedFolderId || undefined,
+          limit: PAGE_SIZE,
+          offset: files.length,
+        },
+      );
+      setFiles((prev) => [...prev, ...next]);
+      setFilesTotal(total);
+    } catch {
+      // ignore
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [files.length, hasMoreFiles, loadingMore, selectedFolderId]);
+
   const fileMenuHandlers = {
     onOpen: (file: FileItem) => {
       if (file.file_kind === 'image') setViewerFile(file);
@@ -833,9 +870,18 @@ function VaultPage() {
 
       {/* 콘텐츠 그리드 */}
       <div
+        ref={scrollParentRef}
         className={`flex-1 min-h-0 overflow-auto rounded-lg transition-colors ${
           isDragOver ? 'ring-2 ring-primary bg-primary/5' : ''
         }`}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          const distanceToBottom =
+            el.scrollHeight - el.scrollTop - el.clientHeight;
+          if (distanceToBottom < 400) {
+            loadMoreFiles();
+          }
+        }}
       >
         {loading ||
         (sortedFolders.length === 0 &&
@@ -906,7 +952,13 @@ function VaultPage() {
               setDragOverFolderId(null);
             }}
             lastClickedFileRef={lastClickedFileRef}
+            scrollParentRef={scrollParentRef}
           />
+        )}
+        {hasMoreFiles && (
+          <div className="py-3 text-center text-xs text-muted-foreground">
+            더 불러오는 중...
+          </div>
         )}
       </div>
 
