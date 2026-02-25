@@ -14,8 +14,8 @@ const VaultPage = lazy(() =>
   })),
 );
 const SettingsPage = lazy(() =>
-  import('@/components/templates/PlaceholderPage').then((m) => ({
-    default: () => <m.default title="설정" />,
+  import('@/pages/SettingsPage/SettingsPage').then((m) => ({
+    default: m.default,
   })),
 );
 

@@ -92,16 +92,17 @@ export function IntroForm() {
         </div>
       </aside>
 
-      {/* 메인 영역 + 우상단 잠금 버튼 */}
-      <main className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden relative">
-        <button
-          onClick={lock}
-          className="absolute top-3 right-3 z-10 flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-          title="금고 잠금"
-        >
-          <Lock size={16} />
-          <span>잠금</span>
-        </button>
+      <main className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
+        <div className="flex items-center justify-end px-4 py-2 shrink-0">
+          <button
+            onClick={lock}
+            className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+            title="금고 잠금"
+          >
+            <Lock size={14} />
+            <span>잠금</span>
+          </button>
+        </div>
         <div className="flex-1 min-h-0 overflow-auto p-4">
           <Outlet />
         </div>

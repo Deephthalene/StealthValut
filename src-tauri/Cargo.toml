@@ -48,3 +48,6 @@ dirs = "5"          # OS별 기본 경로 (AppData, Documents 등)
 url = "2"           # file:// 경로 디코딩
 image = { version = "0.25", features = ["jpeg", "png", "gif", "webp", "bmp", "tiff", "ico"] }
 lofty = "0.23"      # 음악 앨범커버 추출
+http-range = "0.1"          # Range 헤더 파싱 (스트리밍 프로토콜)
+http = "1"                  # HTTP types (스트리밍 응답 구성)
+percent-encoding = "2"      # URL 디코딩

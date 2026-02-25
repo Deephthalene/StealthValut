@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
@@ -15,9 +16,15 @@ export const useVaultStore = create<VaultState>()(
       isUnlocked: false,
       isInitialized: false,
       unlock: () => set({ isUnlocked: true }),
-      lock: () => set({ isUnlocked: false }),
+      lock: () => {
+        set({ isUnlocked: false });
+        invoke('vault_clear_key').catch(() => {});
+      },
       setInitialized: (v) => set({ isInitialized: v }),
     }),
-    { name: 'vault-storage' },
+    {
+      name: 'vault-storage',
+      partialize: (state) => ({ isInitialized: state.isInitialized }),
+    },
   ),
 );

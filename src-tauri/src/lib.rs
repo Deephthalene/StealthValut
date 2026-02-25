@@ -200,6 +200,12 @@ fn get_file_thumbnail(file_id: String) -> Result<Option<String>, String> {
     vault_files::get_or_create_thumbnail(&vault_base_path(), &file_id)
 }
 
+/// 뷰어용: 파일 전체 복호화 → base64 반환
+#[tauri::command]
+fn get_file_data(file_id: String) -> Result<String, String> {
+    vault_files::get_file_data_base64(&vault_base_path(), &file_id)
+}
+
 /// 폴더 내 파일 목록
 #[tauri::command]
 fn list_files(folder_id: Option<String>) -> Result<Vec<vault_files::FileItem>, String> {
@@ -228,6 +234,126 @@ fn vault_confirm_drag_out(file_id: String) -> Result<(), String> {
     vault_files::vault_confirm_drag_out(&vault_base_path(), &file_id)
 }
 
+/// 스트리밍 프로토콜 핸들러: stream://localhost/{file_id}
+fn handle_stream_request(
+    request: http::Request<Vec<u8>>,
+) -> Result<http::Response<Vec<u8>>, Box<dyn std::error::Error>> {
+    use http::header::*;
+    use http::status::StatusCode;
+
+    let path = percent_encoding::percent_decode(request.uri().path().as_bytes())
+        .decode_utf8_lossy()
+        .to_string();
+    let file_id = path.trim_start_matches('/');
+
+    if file_id.is_empty() {
+        return Ok(http::Response::builder()
+            .status(404)
+            .body(Vec::new())?);
+    }
+
+    let base = vault_base_path();
+    let dek = match key_cache::get_dek() {
+        Some(d) => d,
+        None => {
+            return Ok(http::Response::builder()
+                .status(403)
+                .body(b"locked".to_vec())?);
+        }
+    };
+
+    let info = match vault_files::get_stream_info(&base, file_id) {
+        Ok(i) => i,
+        Err(_) => {
+            return Ok(http::Response::builder()
+                .status(404)
+                .body(Vec::new())?);
+        }
+    };
+
+    let total_len = info.size_bytes;
+    let mut resp = http::Response::builder().header(CONTENT_TYPE, &info.mime_type);
+
+    if let Some(range_header) = request.headers().get("range") {
+        let range_str = range_header.to_str().unwrap_or("");
+        let ranges = match http_range::HttpRange::parse(range_str, total_len) {
+            Ok(r) => r,
+            Err(_) => {
+                return Ok(http::Response::builder()
+                    .status(StatusCode::RANGE_NOT_SATISFIABLE)
+                    .header(CONTENT_RANGE, format!("bytes */{total_len}"))
+                    .body(Vec::new())?);
+            }
+        };
+
+        if let Some(range) = ranges.first() {
+            let start = range.start;
+            let mut end = start + range.length - 1;
+            const MAX_CHUNK: u64 = 2 * 1024 * 1024;
+            end = end.min(start + MAX_CHUNK - 1).min(total_len - 1);
+            let bytes_len = end + 1 - start;
+
+            let buf = if info.is_chunked {
+                vault_files::decrypt_range(
+                    &info.enc_path, &dek, info.chunk_size, start, end,
+                )
+            } else {
+                let conn = rusqlite::Connection::open(
+                    crate::db::db_path(&base),
+                ).ok();
+                let header_enc: Option<Vec<u8>> = conn.and_then(|c| {
+                    let hash = info.enc_path.file_name()?.to_str()?;
+                    c.query_row(
+                        "SELECT header_encrypted FROM files WHERE hash_name = ?1",
+                        [hash],
+                        |r| r.get(0),
+                    ).ok()
+                });
+                vault_files::decrypt_range_legacy(
+                    &info.enc_path, header_enc.as_deref(), &dek, start, end,
+                )
+            };
+
+            match buf {
+                Ok(data) => {
+                    resp = resp.header(CONTENT_RANGE, format!("bytes {start}-{end}/{total_len}"));
+                    resp = resp.header(CONTENT_LENGTH, bytes_len);
+                    resp = resp.status(StatusCode::PARTIAL_CONTENT);
+                    Ok(resp.body(data)?)
+                }
+                Err(_) => Ok(http::Response::builder()
+                    .status(500)
+                    .body(Vec::new())?),
+            }
+        } else {
+            Ok(http::Response::builder()
+                .status(StatusCode::RANGE_NOT_SATISFIABLE)
+                .body(Vec::new())?)
+        }
+    } else {
+        // Range 없으면 전체 반환 (소형 파일용)
+        let buf: Result<Vec<u8>, String> = if info.is_chunked {
+            vault_files::decrypt_range(
+                &info.enc_path, &dek, info.chunk_size, 0, total_len.saturating_sub(1),
+            )
+        } else {
+            let header_enc: Option<Vec<u8>> = None;
+            vault_files::decrypt_range_legacy(
+                &info.enc_path, header_enc.as_deref(), &dek, 0, total_len.saturating_sub(1),
+            )
+        };
+        match buf {
+            Ok(data) => {
+                resp = resp.header(CONTENT_LENGTH, data.len());
+                Ok(resp.body(data)?)
+            }
+            Err(_) => Ok(http::Response::builder()
+                .status(500)
+                .body(Vec::new())?),
+        }
+    }
+}
+
 /// Tauri 앱 실행 - 플러그인 등록, invoke 핸들러 등록
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -236,6 +362,20 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_drag::init())
+        .register_asynchronous_uri_scheme_protocol("stream", move |_ctx, request, responder| {
+            std::thread::spawn(move || {
+                match handle_stream_request(request) {
+                    Ok(resp) => responder.respond(resp),
+                    Err(e) => responder.respond(
+                        http::Response::builder()
+                            .status(500)
+                            .header("Content-Type", "text/plain")
+                            .body(e.to_string().into_bytes())
+                            .unwrap(),
+                    ),
+                }
+            });
+        })
         .invoke_handler(tauri::generate_handler![
             check_quota,
             get_vault_path,
@@ -256,6 +396,7 @@ pub fn run() {
             delete_folder,
             vault_move_file,
             get_file_thumbnail,
+            get_file_data,
             list_files,
             vault_extract_file,
             vault_prepare_drag_out,

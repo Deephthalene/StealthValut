@@ -1,3 +1,4 @@
+import { useAutoLock } from '@/hooks/useAutoLock';
 import VaultSetupPage from '@/pages/VaultSetupPage/VaultSetupPage';
 import VaultUnlockPage from '@/pages/VaultUnlockPage/VaultUnlockPage';
 import { useVaultStore } from '@/stores/useVaultStore';
@@ -49,6 +50,8 @@ export default function VaultGate({ children }: VaultGateProps) {
     useVaultStore();
   const [loading, setLoading] = useState(true);
 
+  useAutoLock();
+
   useEffect(() => {
     const check = async () => {
       if (!isTauriEnv()) {
@@ -58,13 +61,6 @@ export default function VaultGate({ children }: VaultGateProps) {
       try {
         const exists = await invoke<boolean>('vault_exists');
         setInitialized(exists);
-        if (exists && isUnlocked) {
-          try {
-            await invoke('check_quota');
-          } catch {
-            lock();
-          }
-        }
       } catch {
         setInitialized(false);
       } finally {
@@ -72,11 +68,7 @@ export default function VaultGate({ children }: VaultGateProps) {
       }
     };
     check();
-  }, [setInitialized, lock, isUnlocked]);
-
-  const handleBoundaryReset = () => {
-    lock();
-  };
+  }, [setInitialized]);
 
   if (loading) {
     return (
@@ -107,8 +99,6 @@ export default function VaultGate({ children }: VaultGateProps) {
   }
 
   return (
-    <VaultErrorBoundary onReset={handleBoundaryReset}>
-      {children}
-    </VaultErrorBoundary>
+    <VaultErrorBoundary onReset={() => lock()}>{children}</VaultErrorBoundary>
   );
 }

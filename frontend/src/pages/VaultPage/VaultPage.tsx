@@ -1,10 +1,13 @@
+import AudioPlayer from '@/components/organisms/AudioPlayer/AudioPlayer';
+import ImageViewer from '@/components/organisms/ImageViewer/ImageViewer';
 import { dispatchVaultFilesChanged } from '@/components/organisms/SidebarStorage/SidebarStorage';
+import VideoPlayer from '@/components/organisms/VideoPlayer/VideoPlayer';
 import { useVaultFolderStore } from '@/stores/useVaultFolderStore';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import {
-  Download,
+  ArrowUpFromLine,
   File,
   FileAudio,
   FileImage,
@@ -15,7 +18,7 @@ import {
   Loader2,
   Upload,
 } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 function isTauriEnv(): boolean {
@@ -54,6 +57,10 @@ function VaultPage() {
   const [exportingId, setExportingId] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState('');
   const [isDragOver, setIsDragOver] = useState(false);
+  const uploadingRef = useRef(false);
+  const [viewerFile, setViewerFile] = useState<FileItem | null>(null);
+  const [audioFile, setAudioFile] = useState<FileItem | null>(null);
+  const [videoFile, setVideoFile] = useState<FileItem | null>(null);
 
   const load = useCallback(async () => {
     if (!isTauriEnv()) {
@@ -97,7 +104,9 @@ function VaultPage() {
         else setIsDragOver(false);
 
         if (t === 'drop' && event.payload.paths?.length) {
-          const paths = event.payload.paths as string[];
+          if (uploadingRef.current) return;
+          uploadingRef.current = true;
+          const paths = [...new Set(event.payload.paths as string[])];
           setUploadError('');
           setUploading(true);
           setUploadProgress({ current: 0, total: paths.length });
@@ -139,6 +148,7 @@ function VaultPage() {
               load().then(dispatchVaultFilesChanged);
               setUploading(false);
               setUploadProgress(null);
+              uploadingRef.current = false;
             });
         }
       })
@@ -450,7 +460,16 @@ function VaultPage() {
                   key={file.id}
                   draggable
                   onDragStart={(e) => handleFileDragStart(e, file)}
-                  className="group relative flex flex-col rounded-xl border border-border hover:border-primary/30 hover:shadow-md transition-all cursor-grab active:cursor-grabbing overflow-hidden"
+                  onClick={() => {
+                    if (file.file_kind === 'image') setViewerFile(file);
+                    else if (file.file_kind === 'audio') setAudioFile(file);
+                    else if (file.file_kind === 'video') setVideoFile(file);
+                  }}
+                  className={`group relative flex flex-col rounded-xl border border-border hover:border-primary/30 hover:shadow-md transition-all overflow-hidden ${
+                    ['image', 'audio', 'video'].includes(file.file_kind)
+                      ? 'cursor-pointer'
+                      : 'cursor-grab active:cursor-grabbing'
+                  }`}
                 >
                   <div className="relative aspect-square bg-accent/20 flex items-center justify-center overflow-hidden">
                     {file.thumbnail_base64 ? (
@@ -462,32 +481,31 @@ function VaultPage() {
                     ) : (
                       <Icon size={48} className={iconColor} />
                     )}
-                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleExport(file);
-                        }}
-                        disabled={exportingId === file.id}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-white text-gray-800 shadow-lg opacity-0 group-hover:opacity-100 translate-y-1 group-hover:translate-y-0 transition-all disabled:opacity-50"
-                        title="내보내기 (금고에서 삭제)"
-                      >
-                        <Download size={13} />
-                        내보내기
-                      </button>
-                    </div>
                   </div>
-                  <div className="px-3 py-2.5">
-                    <p
-                      className="text-sm font-medium truncate"
-                      title={file.original_name}
+                  <div className="flex items-center gap-1 px-2.5 py-2">
+                    <div className="flex-1 min-w-0">
+                      <p
+                        className="text-sm font-medium truncate"
+                        title={file.original_name}
+                      >
+                        {file.original_name}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {sizeLabel}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleExport(file);
+                      }}
+                      disabled={exportingId === file.id}
+                      className="shrink-0 p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-50"
+                      title="내보내기"
                     >
-                      {file.original_name}
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {sizeLabel}
-                    </p>
+                      <ArrowUpFromLine size={14} />
+                    </button>
                   </div>
                 </div>
               );
@@ -495,6 +513,31 @@ function VaultPage() {
           </div>
         )}
       </div>
+
+      {viewerFile && (
+        <ImageViewer
+          file={viewerFile}
+          images={files.filter((f) => f.file_kind === 'image')}
+          onClose={() => setViewerFile(null)}
+        />
+      )}
+
+      {videoFile && (
+        <VideoPlayer
+          file={videoFile}
+          videos={files.filter((f) => f.file_kind === 'video')}
+          onClose={() => setVideoFile(null)}
+        />
+      )}
+
+      {audioFile && (
+        <AudioPlayer
+          file={audioFile}
+          playlist={files.filter((f) => f.file_kind === 'audio')}
+          onClose={() => setAudioFile(null)}
+          onFileChange={(f) => setAudioFile(f as FileItem)}
+        />
+      )}
     </div>
   );
 }

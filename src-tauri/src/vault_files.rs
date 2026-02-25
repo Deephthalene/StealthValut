@@ -7,16 +7,14 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use crate::crypto;
 use crate::key_cache;
 use crate::thumbnails;
-use rand::RngCore;
 use rusqlite::Connection;
 use std::fs;
-use std::io::Write;
+use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 const DATA_DIR: &str = "data";
-const HEADER_MAX_LEN: usize = 8192;
-/// 현재 전체 로드 방식, 2GB 초과 시 거부 (청크 암호화 도입 전)
-const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// 썸네일 생성용 최대 읽기 크기 (대형 파일은 앞부분만 읽어서 시도)
+const THUMB_MAX_READ: u64 = 100 * 1024 * 1024;
 
 /// 금고 data 폴더 경로
 fn data_dir(base: &Path) -> std::path::PathBuf {
@@ -72,16 +70,7 @@ fn decrypt_field(
     }
 }
 
-/// 헤더 변조: 원본 앞부분 암호화 → DB용 blob (len_be[2] + encrypted)
-fn build_header_encrypted(header: &[u8], dek: &[u8; crate::crypto::KEY_LEN]) -> Result<Vec<u8>, String> {
-    let enc = crypto::encrypt(header, dek)?;
-    let mut out = Vec::with_capacity(2 + enc.len());
-    out.extend_from_slice(&(header.len() as u16).to_be_bytes());
-    out.extend_from_slice(&enc);
-    Ok(out)
-}
-
-/// header_encrypted blob 파싱 → (header_len, encrypted_bytes)
+/// header_encrypted blob 파싱 (레거시 파일 호환용) → (header_len, encrypted_bytes)
 fn parse_header_encrypted(blob: &[u8]) -> Result<(u16, &[u8]), String> {
     if blob.len() < 2 {
         return Err("header_encrypted 형식 오류".into());
@@ -157,13 +146,6 @@ pub fn vault_move_file(
     if !meta.is_file() {
         return Err("폴더는 업로드할 수 없습니다.".into());
     }
-    if meta.len() > MAX_FILE_BYTES {
-        return Err(format!(
-            "파일 크기 제한 초과 (최대 {}GB). 청크 암호화 업데이트 후 대용량 지원 예정.",
-            MAX_FILE_BYTES / (1024 * 1024 * 1024)
-        ));
-    }
-
     let original_name = source_path
         .file_name()
         .and_then(|n| n.to_str())
@@ -195,28 +177,32 @@ pub fn vault_move_file(
     }
 
     let do_upload = || -> Result<String, String> {
-        let plaintext = fs::read(&temp_path).map_err(|e| e.to_string())?;
-
         let file_kind = thumbnails::file_kind_from_ext(Path::new(&original_name));
-        let thumbnail_plain = make_thumbnail(&plaintext, Path::new(&original_name))?;
 
-        let (header_encrypted, body_encrypted) = if plaintext.len() > 0 {
-            let header_len = plaintext.len().min(HEADER_MAX_LEN);
-            let (header, body) = plaintext.split_at(header_len);
-            let enc_header = build_header_encrypted(header, &dek)?;
-            let enc_body = crypto::encrypt(body, &dek)?;
-            let mut dummy = vec![0u8; header_len];
-            rand::thread_rng().fill_bytes(&mut dummy);
-            let physical: Vec<u8> = dummy.into_iter().chain(enc_body.into_iter()).collect();
-            (Some(enc_header), physical)
-        } else {
-            let enc = crypto::encrypt(&plaintext, &dek)?;
-            (None, enc)
+        // 썸네일: 소형 파일은 전체, 대형 파일은 앞부분만 읽어서 시도
+        let thumbnail_plain = {
+            let file_len = fs::metadata(&temp_path).map_err(|e| e.to_string())?.len();
+            let read_len = file_len.min(THUMB_MAX_READ) as usize;
+            let mut f = fs::File::open(&temp_path).map_err(|e| e.to_string())?;
+            let mut buf = vec![0u8; read_len];
+            f.read_exact(&mut buf).map_err(|e| e.to_string())?;
+            if file_len <= THUMB_MAX_READ {
+                make_thumbnail(&buf, Path::new(&original_name))?
+            } else {
+                make_thumbnail(&buf, Path::new(&original_name)).unwrap_or(None)
+            }
         };
 
+        // 청크 스트리밍 암호화 (메모리 = 1MB)
         let hash_name = format!("{}.dat", id);
         let dest_file = data_path.join(&hash_name);
-        fs::write(&dest_file, &body_encrypted).map_err(|e| e.to_string())?;
+        {
+            let src = fs::File::open(&temp_path).map_err(|e| e.to_string())?;
+            let dst = fs::File::create(&dest_file).map_err(|e| e.to_string())?;
+            let mut reader = BufReader::new(src);
+            let mut writer = BufWriter::new(dst);
+            crypto::encrypt_file_chunked(&mut reader, &mut writer, &dek, crypto::CHUNK_SIZE)?;
+        }
 
         secure_delete(&temp_path).map_err(|e| {
             fs::remove_file(&dest_file).ok();
@@ -238,12 +224,6 @@ pub fn vault_move_file(
             thumbnails::FileKind::Other => "other",
         };
 
-        eprintln!("[vault] upload id={} kind={} thumb_plain={} thumb_enc={}",
-            id, file_kind_str,
-            thumbnail_plain.as_ref().map_or(0, |v| v.len()),
-            thumbnail_encrypted.as_ref().map_or(0, |v| v.len()),
-        );
-
         let conn = conn(base)?;
         conn.execute_batch("BEGIN IMMEDIATE").map_err(|e| e.to_string())?;
 
@@ -259,7 +239,7 @@ pub fn vault_move_file(
                     None::<String>,
                     size_bytes,
                     thumbnail_encrypted,
-                    header_encrypted,
+                    None::<Vec<u8>>,
                     created_at,
                 ],
             )
@@ -285,17 +265,6 @@ pub fn vault_move_file(
         match tx_result {
             Ok(()) => {
                 conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
-                // 저장 검증
-                let verify: (Option<Vec<u8>>, Option<Vec<u8>>) = conn.query_row(
-                    "SELECT f.thumbnail_blob, fi.thumbnail_blob FROM files f LEFT JOIN files_index fi ON f.id = fi.id WHERE f.id = ?1",
-                    [&id],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                ).map_err(|e| e.to_string())?;
-                eprintln!("[vault] VERIFY id={} files.thumb={} files_index.thumb={}",
-                    id,
-                    verify.0.as_ref().map_or(0, |v| v.len()),
-                    verify.1.as_ref().map_or(0, |v| v.len()),
-                );
             }
             Err(e) => {
                 let _ = conn.execute_batch("ROLLBACK");
@@ -321,6 +290,41 @@ pub fn vault_move_file(
     }
 }
 
+/// 암호화 파일 → writer 스트리밍 복호화 (청크/레거시 자동 감지)
+fn decrypt_to_writer(
+    enc_path: &Path,
+    header_encrypted: Option<&[u8]>,
+    dek: &[u8; crypto::KEY_LEN],
+    writer: &mut impl Write,
+) -> Result<(), String> {
+    let mut file = fs::File::open(enc_path).map_err(|e| e.to_string())?;
+    let mut magic = [0u8; 2];
+    file.read_exact(&mut magic).map_err(|e| e.to_string())?;
+    file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+
+    if crypto::is_chunked(&magic) {
+        let mut reader = BufReader::new(file);
+        crypto::decrypt_file_chunked(&mut reader, writer, dek)
+    } else {
+        let mut physical = Vec::new();
+        file.read_to_end(&mut physical).map_err(|e| e.to_string())?;
+        let plaintext = decrypt_file_full(&physical, header_encrypted, dek)?;
+        writer.write_all(&plaintext).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
+
+/// 암호화 파일 → Vec<u8> 전체 복호화 (썸네일 생성 등 메모리 필요 시)
+fn decrypt_to_vec(
+    enc_path: &Path,
+    header_encrypted: Option<&[u8]>,
+    dek: &[u8; crypto::KEY_LEN],
+) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    decrypt_to_writer(enc_path, header_encrypted, dek, &mut out)?;
+    Ok(out)
+}
+
 /// 파일 목록용 아이템
 #[derive(serde::Serialize)]
 pub struct FileItem {
@@ -331,6 +335,29 @@ pub struct FileItem {
     pub file_kind: thumbnails::FileKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thumbnail_base64: Option<String>,
+}
+
+/// 뷰어용: 파일 전체 복호화 → base64 반환 (이미지 등 소형 파일)
+pub fn get_file_data_base64(base: &Path, file_id: &str) -> Result<String, String> {
+    let dek = key_cache::get_dek()
+        .ok_or("암호화 키가 없습니다. 금고를 잠근 후 비밀번호로 다시 열어주세요.")?;
+
+    let conn = conn(base)?;
+    let (hash_name, header_enc): (String, Option<Vec<u8>>) = conn
+        .query_row(
+            "SELECT hash_name, header_encrypted FROM files WHERE id = ?1",
+            [file_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|_| "파일을 찾을 수 없습니다.")?;
+
+    let enc_path = data_dir(base).join(&hash_name);
+    if !enc_path.exists() {
+        return Err("암호화된 파일이 없습니다.".into());
+    }
+
+    let plaintext = decrypt_to_vec(&enc_path, header_enc.as_deref(), &dek)?;
+    Ok(BASE64.encode(&plaintext))
 }
 
 /// 썸네일 없을 때 on-demand 생성 (기존 업로드 파일용)
@@ -368,8 +395,7 @@ pub fn get_or_create_thumbnail(
         return Ok(None);
     }
 
-    let physical = fs::read(&enc_path).map_err(|e| e.to_string())?;
-    let plaintext = decrypt_file_full(&physical, header_enc.as_deref(), &dek)?;
+    let plaintext = decrypt_to_vec(&enc_path, header_enc.as_deref(), &dek)?;
     let path = Path::new(&original_name);
 
     let thumb = make_thumbnail(&plaintext, path).ok().flatten();
@@ -481,7 +507,7 @@ fn parse_file_kind(s: &str) -> thumbnails::FileKind {
     }
 }
 
-/// 파일 출고 (복호화 → 저장 → 금고에서 삭제)
+/// 파일 출고 (스트리밍 복호화 → 저장 → 금고에서 삭제)
 pub fn vault_extract_file(
     base: &Path,
     file_id: &str,
@@ -504,10 +530,9 @@ pub fn vault_extract_file(
         return Err("암호화된 파일이 없습니다.".into());
     }
 
-    let physical = fs::read(&enc_path).map_err(|e| e.to_string())?;
-    let plaintext = decrypt_file_full(&physical, header_enc.as_deref(), &dek)?;
-
-    fs::write(dest_path, &plaintext).map_err(|e| e.to_string())?;
+    let dest = fs::File::create(dest_path).map_err(|e| e.to_string())?;
+    let mut writer = BufWriter::new(dest);
+    decrypt_to_writer(&enc_path, header_enc.as_deref(), &dek, &mut writer)?;
 
     fs::remove_file(&enc_path).map_err(|e| {
         format!("암호화 파일 삭제 실패: {}", e)
@@ -520,8 +545,7 @@ pub fn vault_extract_file(
     Ok(())
 }
 
-/// 드래그아웃용: 임시 경로에 복호화 후 경로 반환 (금고에서는 삭제하지 않음)
-/// startDrag 완료 후 vault_extract_confirm_drag(file_id) 호출하여 금고에서 삭제
+/// 드래그아웃용: 임시 경로에 스트리밍 복호화 후 경로 반환
 pub fn vault_prepare_drag_out(base: &Path, file_id: &str) -> Result<String, String> {
     let dek = key_cache::get_dek()
         .ok_or("암호화 키가 없습니다. 금고를 잠근 후 비밀번호로 다시 열어주세요.")?;
@@ -543,9 +567,6 @@ pub fn vault_prepare_drag_out(base: &Path, file_id: &str) -> Result<String, Stri
         return Err("암호화된 파일이 없습니다.".into());
     }
 
-    let physical = fs::read(&enc_path).map_err(|e| e.to_string())?;
-    let plaintext = decrypt_file_full(&physical, header_enc.as_deref(), &dek)?;
-
     let temp_dir = std::env::temp_dir().join("stealthvault_drag");
     fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
     let safe_name = Path::new(&display_name)
@@ -553,7 +574,10 @@ pub fn vault_prepare_drag_out(base: &Path, file_id: &str) -> Result<String, Stri
         .and_then(|n| n.to_str())
         .unwrap_or("file");
     let temp_path = temp_dir.join(format!("{}_{}", file_id, safe_name));
-    fs::write(&temp_path, &plaintext).map_err(|e| e.to_string())?;
+
+    let dest = fs::File::create(&temp_path).map_err(|e| e.to_string())?;
+    let mut writer = BufWriter::new(dest);
+    decrypt_to_writer(&enc_path, header_enc.as_deref(), &dek, &mut writer)?;
 
     Ok(temp_path.to_string_lossy().to_string())
 }
@@ -588,4 +612,137 @@ pub fn vault_confirm_drag_out(base: &Path, file_id: &str) -> Result<(), String> 
     }
 
     Ok(())
+}
+
+// ===================== 스트리밍 프로토콜 헬퍼 =====================
+
+/// 스트리밍용 파일 정보
+pub struct StreamFileInfo {
+    pub enc_path: std::path::PathBuf,
+    pub size_bytes: u64,
+    pub mime_type: String,
+    pub is_chunked: bool,
+    pub chunk_size: u32,
+}
+
+/// file_id → 스트리밍에 필요한 정보 조회
+pub fn get_stream_info(base: &Path, file_id: &str) -> Result<StreamFileInfo, String> {
+    let conn = conn(base)?;
+    let (hash_name, size_bytes): (String, i64) = conn
+        .query_row(
+            "SELECT hash_name, size_bytes FROM files_index WHERE id = ?1",
+            [file_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|_| "파일을 찾을 수 없습니다.")?;
+    let display_name: String = conn
+        .query_row(
+            "SELECT display_name FROM files_index WHERE id = ?1",
+            [file_id],
+            |r| r.get(0),
+        )
+        .unwrap_or_else(|_| "file".into());
+
+    let enc_path = data_dir(base).join(&hash_name);
+    if !enc_path.exists() {
+        return Err("암호화된 파일이 없습니다.".into());
+    }
+
+    let mut file = fs::File::open(&enc_path).map_err(|e| e.to_string())?;
+    let mut magic = [0u8; 2];
+    file.read_exact(&mut magic).map_err(|e| e.to_string())?;
+
+    let (is_chunked, chunk_size) = if crypto::is_chunked(&magic) {
+        file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+        let mut hdr = [0u8; crypto::FILE_HEADER_SIZE];
+        file.read_exact(&mut hdr).map_err(|e| e.to_string())?;
+        let h = crypto::parse_chunked_header(&hdr)?;
+        (true, h.chunk_size)
+    } else {
+        (false, 0)
+    };
+
+    let mime_type = mime_from_name(&display_name);
+
+    Ok(StreamFileInfo {
+        enc_path,
+        size_bytes: size_bytes as u64,
+        mime_type,
+        is_chunked,
+        chunk_size,
+    })
+}
+
+/// 청크 파일에서 Range [start, end] (inclusive) 복호화
+pub fn decrypt_range(
+    enc_path: &Path,
+    dek: &[u8; crypto::KEY_LEN],
+    chunk_size: u32,
+    start: u64,
+    end: u64,
+) -> Result<Vec<u8>, String> {
+    let mut file = fs::File::open(enc_path).map_err(|e| e.to_string())?;
+    let cs = chunk_size as u64;
+    let first = start / cs;
+    let last = end / cs;
+
+    let mut result = Vec::with_capacity((end - start + 1) as usize);
+    for i in first..=last {
+        let plain = crypto::decrypt_chunk_at(&mut file, dek, i, chunk_size)?;
+        let chunk_offset = i * cs;
+        let slice_start = if i == first {
+            (start - chunk_offset) as usize
+        } else {
+            0
+        };
+        let slice_end = if i == last {
+            ((end - chunk_offset) as usize + 1).min(plain.len())
+        } else {
+            plain.len()
+        };
+        result.extend_from_slice(&plain[slice_start..slice_end]);
+    }
+    Ok(result)
+}
+
+/// 레거시(비청크) 파일 전체 복호화 후 Range 슬라이스
+pub fn decrypt_range_legacy(
+    enc_path: &Path,
+    header_encrypted: Option<&[u8]>,
+    dek: &[u8; crypto::KEY_LEN],
+    start: u64,
+    end: u64,
+) -> Result<Vec<u8>, String> {
+    let plaintext = decrypt_to_vec(enc_path, header_encrypted, dek)?;
+    let s = start as usize;
+    let e = (end as usize + 1).min(plaintext.len());
+    if s >= plaintext.len() {
+        return Ok(Vec::new());
+    }
+    Ok(plaintext[s..e].to_vec())
+}
+
+fn mime_from_name(name: &str) -> String {
+    let ext = name.rsplit('.').next().unwrap_or("").to_lowercase();
+    match ext.as_str() {
+        "mp4" | "m4v" => "video/mp4",
+        "webm" => "video/webm",
+        "mkv" => "video/x-matroska",
+        "avi" => "video/x-msvideo",
+        "mov" => "video/quicktime",
+        "mp3" => "audio/mpeg",
+        "flac" => "audio/flac",
+        "wav" => "audio/wav",
+        "ogg" | "oga" => "audio/ogg",
+        "m4a" | "aac" => "audio/mp4",
+        "wma" => "audio/x-ms-wma",
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "pdf" => "application/pdf",
+        _ => "application/octet-stream",
+    }
+    .to_string()
 }
