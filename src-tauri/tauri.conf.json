@@ -10,7 +10,8 @@
     "frontendDist": "../frontend/dist"
   },
   "bundle": {
-    "active": true
+    "active": true,
+    "icon": ["icons/icon.ico"]
   },
   "app": {
     "windows": [
