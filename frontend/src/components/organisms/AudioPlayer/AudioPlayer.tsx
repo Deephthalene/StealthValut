@@ -52,6 +52,7 @@ export default function AudioPlayer({
   const [muted, setMuted] = useState(false);
   const [currentFile, setCurrentFile] = useState(file);
   const [showPlaylist, setShowPlaylist] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const seekingRef = useRef(false);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -83,8 +84,10 @@ export default function AudioPlayer({
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
+    setLoadError(null);
     audio.src = getStreamUrl(currentFile.id);
     audio.load();
+    // play()가 스트림 로딩 전/정책으로 reject될 수 있음. 실제 재생은 나중에 될 수 있어서 여기서는 에러 안 띄움
     audio
       .play()
       .then(() => setPlaying(true))
@@ -103,20 +106,26 @@ export default function AudioPlayer({
       if (currentIdx < playlist.length - 1) navigate(1);
       else setPlaying(false);
     };
-    const onPlay = () => setPlaying(true);
+    const onPlay = () => {
+      setPlaying(true);
+      setLoadError(null);
+    };
     const onPause = () => setPlaying(false);
+    const onCanPlay = () => setLoadError(null);
 
     audio.addEventListener('timeupdate', onTime);
     audio.addEventListener('durationchange', onDur);
     audio.addEventListener('ended', onEnd);
     audio.addEventListener('play', onPlay);
     audio.addEventListener('pause', onPause);
+    audio.addEventListener('canplay', onCanPlay);
     return () => {
       audio.removeEventListener('timeupdate', onTime);
       audio.removeEventListener('durationchange', onDur);
       audio.removeEventListener('ended', onEnd);
       audio.removeEventListener('play', onPlay);
       audio.removeEventListener('pause', onPause);
+      audio.removeEventListener('canplay', onCanPlay);
     };
   }, [currentIdx, playlist.length, navigate]);
 
@@ -132,7 +141,11 @@ export default function AudioPlayer({
   const togglePlay = () => {
     const audio = audioRef.current;
     if (!audio) return;
-    playing ? audio.pause() : audio.play().catch(() => {});
+    if (playing) {
+      audio.pause();
+    } else {
+      audio.play().catch(() => setPlaying(false));
+    }
   };
 
   // custom seek bar drag
@@ -193,7 +206,11 @@ export default function AudioPlayer({
 
   return (
     <>
-      <audio ref={audioRef} preload="auto" />
+      <audio
+        ref={audioRef}
+        preload="auto"
+        onError={() => setLoadError('오디오를 불러올 수 없습니다.')}
+      />
 
       {/* Playlist panel */}
       {showPlaylist && (
@@ -266,7 +283,7 @@ export default function AudioPlayer({
       )}
 
       {/* Mini player */}
-      <div className="fixed bottom-0 left-0 right-0 z-50 bg-card/95 backdrop-blur-xl border-t border-border">
+      <div className="fixed bottom-0 left-48 right-0 z-50 bg-card/95 backdrop-blur-xl border-t border-border">
         {/* Seek bar (full width thin line at top) */}
         <div
           ref={seekRef}
@@ -338,9 +355,13 @@ export default function AudioPlayer({
             <p className="text-sm font-medium truncate">
               {currentFile.original_name}
             </p>
-            <p className="text-xs text-muted-foreground tabular-nums mt-0.5">
-              {formatTime(currentTime)} / {formatTime(duration)}
-            </p>
+            {loadError ? (
+              <p className="text-xs text-rose-500 mt-0.5">{loadError}</p>
+            ) : (
+              <p className="text-xs text-muted-foreground tabular-nums mt-0.5">
+                {formatTime(currentTime)} / {formatTime(duration)}
+              </p>
+            )}
           </div>
 
           {/* Controls */}

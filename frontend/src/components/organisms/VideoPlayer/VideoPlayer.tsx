@@ -50,6 +50,7 @@ export default function VideoPlayer({ file, videos, onClose }: Props) {
   const [muted, setMuted] = useState(false);
   const [isFs, setIsFs] = useState(false);
   const [showUi, setShowUi] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -79,6 +80,7 @@ export default function VideoPlayer({ file, videos, onClose }: Props) {
       if (i >= 0 && i < videos.length) {
         setCur(videos[i]);
         setLoading(true);
+        setLoadError(null);
         setTime(0);
         setDuration(0);
       }
@@ -89,6 +91,7 @@ export default function VideoPlayer({ file, videos, onClose }: Props) {
   useEffect(() => {
     setCur(file);
     setLoading(true);
+    setLoadError(null);
   }, [file]);
 
   useEffect(() => {
@@ -119,6 +122,11 @@ export default function VideoPlayer({ file, videos, onClose }: Props) {
     v.addEventListener('playing', onPlaying);
     v.addEventListener('canplay', onCan);
     v.addEventListener('ended', onEnd);
+    const onErr = () => {
+      setLoading(false);
+      setLoadError('영상을 불러올 수 없습니다.');
+    };
+    v.addEventListener('error', onErr);
     return () => {
       v.removeEventListener('timeupdate', onTime);
       v.removeEventListener('durationchange', onDur);
@@ -128,6 +136,7 @@ export default function VideoPlayer({ file, videos, onClose }: Props) {
       v.removeEventListener('playing', onPlaying);
       v.removeEventListener('canplay', onCan);
       v.removeEventListener('ended', onEnd);
+      v.removeEventListener('error', onErr);
     };
   }, [idx, videos.length, nav]);
 
@@ -200,7 +209,11 @@ export default function VideoPlayer({ file, videos, onClose }: Props) {
   const togglePlay = useCallback(() => {
     const v = videoRef.current;
     if (!v) return;
-    v.paused ? v.play() : v.pause();
+    if (v.paused) {
+      v.play().catch(() => setLoadError('재생할 수 없습니다.'));
+    } else {
+      v.pause();
+    }
   }, []);
 
   const toggleFs = useCallback(() => {
@@ -265,8 +278,10 @@ export default function VideoPlayer({ file, videos, onClose }: Props) {
         key={cur.id}
         src={getStreamUrl(cur.id)}
         autoPlay
+        playsInline
         className="absolute inset-0 w-full h-full object-contain pointer-events-none"
         style={{ outline: 'none' }}
+        onError={() => setLoadError('영상을 불러올 수 없습니다.')}
       />
 
       {/* Transparent interaction layer - ALWAYS captures mouse events */}
@@ -277,9 +292,23 @@ export default function VideoPlayer({ file, videos, onClose }: Props) {
       />
 
       {/* Loading spinner */}
-      {loading && (
+      {loading && !loadError && (
         <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
           <Loader2 size={48} className="animate-spin text-white/50" />
+        </div>
+      )}
+
+      {/* Load error */}
+      {loadError && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center z-10 gap-3 text-white/90">
+          <p className="text-sm">{loadError}</p>
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-sm"
+          >
+            닫기
+          </button>
         </div>
       )}
 

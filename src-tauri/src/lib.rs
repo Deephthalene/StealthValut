@@ -245,10 +245,25 @@ fn get_file_data(file_id: String) -> Result<String, String> {
     vault_files::get_file_data_base64(&vault_base_path(), &file_id)
 }
 
-/// 폴더 내 파일 목록
+/// 폴더 내 파일 목록 (전체, 기존 호환)
 #[tauri::command]
 fn list_files(folder_id: Option<String>) -> Result<Vec<vault_files::FileItem>, String> {
     vault_files::list_files(&vault_base_path(), folder_id.as_deref())
+}
+
+/// 폴더 내 파일 목록 페이징 (가상 리스트/무한 스크롤용)
+#[tauri::command]
+fn list_files_paged(
+    folder_id: Option<String>,
+    limit: u32,
+    offset: u32,
+) -> Result<(Vec<vault_files::FileItem>, u64), String> {
+    vault_files::list_files_page(
+        &vault_base_path(),
+        folder_id.as_deref(),
+        limit,
+        offset,
+    )
 }
 
 /// 파일 출고 (복호화 → 저장 → 금고에서 삭제)
@@ -352,24 +367,32 @@ fn handle_stream_request(
             end = end.min(start + MAX_CHUNK - 1).min(total_len - 1);
             let bytes_len = end + 1 - start;
 
+            let conn = rusqlite::Connection::open(crate::db::db_path(&base)).ok();
+            let header_enc: Option<Vec<u8>> = conn.and_then(|c| {
+                let hash = info.enc_path.file_name()?.to_str()?;
+                c.query_row(
+                    "SELECT header_encrypted FROM files WHERE hash_name = ?1",
+                    [hash],
+                    |r| r.get(0),
+                )
+                .ok()
+            });
             let buf = if info.is_chunked {
                 vault_files::decrypt_range(
-                    &info.enc_path, &dek, info.chunk_size, start, end,
+                    &info.enc_path,
+                    &dek,
+                    info.chunk_size,
+                    header_enc.as_deref(),
+                    start,
+                    end,
                 )
             } else {
-                let conn = rusqlite::Connection::open(
-                    crate::db::db_path(&base),
-                ).ok();
-                let header_enc: Option<Vec<u8>> = conn.and_then(|c| {
-                    let hash = info.enc_path.file_name()?.to_str()?;
-                    c.query_row(
-                        "SELECT header_encrypted FROM files WHERE hash_name = ?1",
-                        [hash],
-                        |r| r.get(0),
-                    ).ok()
-                });
                 vault_files::decrypt_range_legacy(
-                    &info.enc_path, header_enc.as_deref(), &dek, start, end,
+                    &info.enc_path,
+                    header_enc.as_deref(),
+                    &dek,
+                    start,
+                    end,
                 )
             };
 
@@ -391,14 +414,32 @@ fn handle_stream_request(
         }
     } else {
         // Range 없으면 전체 반환 (소형 파일용)
+        let conn = rusqlite::Connection::open(crate::db::db_path(&base)).ok();
+        let header_enc: Option<Vec<u8>> = conn.and_then(|c| {
+            let hash = info.enc_path.file_name()?.to_str()?;
+            c.query_row(
+                "SELECT header_encrypted FROM files WHERE hash_name = ?1",
+                [hash],
+                |r| r.get(0),
+            )
+            .ok()
+        });
         let buf: Result<Vec<u8>, String> = if info.is_chunked {
             vault_files::decrypt_range(
-                &info.enc_path, &dek, info.chunk_size, 0, total_len.saturating_sub(1),
+                &info.enc_path,
+                &dek,
+                info.chunk_size,
+                header_enc.as_deref(),
+                0,
+                total_len.saturating_sub(1),
             )
         } else {
-            let header_enc: Option<Vec<u8>> = None;
             vault_files::decrypt_range_legacy(
-                &info.enc_path, header_enc.as_deref(), &dek, 0, total_len.saturating_sub(1),
+                &info.enc_path,
+                header_enc.as_deref(),
+                &dek,
+                0,
+                total_len.saturating_sub(1),
             )
         };
         match buf {
@@ -462,6 +503,7 @@ pub fn run() {
             get_file_thumbnail,
             get_file_data,
             list_files,
+            list_files_paged,
             vault_extract_file,
             vault_extract_folder,
             vault_copy_out,

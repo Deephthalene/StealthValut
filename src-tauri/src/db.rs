@@ -98,7 +98,8 @@ pub fn ensure_schema(base: &Path) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
     migrate_add_folder_id(base)?;
-    migrate_add_files_index(base)
+    migrate_add_files_index(base)?;
+    migrate_add_created_at_enc(base)
 }
 
 /// 기존 DB에 folder_id 컬럼 추가 (마이그레이션)
@@ -138,5 +139,24 @@ fn migrate_add_files_index(base: &Path) -> Result<(), String> {
         "#,
     )
     .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// created_at 암호화용 컬럼 추가 (Phase 6 메타데이터 암호화)
+fn migrate_add_created_at_enc(base: &Path) -> Result<(), String> {
+    let conn = conn(base)?;
+    for table in ["files", "files_index"] {
+        let has: bool = conn
+            .query_row(
+                &format!("SELECT COUNT(1) FROM pragma_table_info('{table}') WHERE name='created_at_enc'"),
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if !has {
+            conn.execute(&format!("ALTER TABLE {table} ADD COLUMN created_at_enc TEXT"), [])
+                .map_err(|e| e.to_string())?;
+        }
+    }
     Ok(())
 }

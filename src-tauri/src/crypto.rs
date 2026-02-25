@@ -4,7 +4,11 @@
 // 1) 단건 암호화: encrypt/decrypt (메타데이터, 썸네일 등 작은 데이터)
 // 2) 청크 암호화: encrypt_file_chunked / decrypt_file_chunked (파일)
 //
-// 청크 파일 포맷:
+// 파일 포맷 구분:
+//   - 레거시: 매직 없음. 전체 파일을 encrypt() 한 블롭. (구 형식, 신규 업로드는 청크만 사용)
+//   - 청크(SV): 아래 포맷. format_version으로 향후 확장 가능.
+//
+// 청크 파일 포맷 (SV):
 //   [헤더 8B] "SV" + version(1) + reserved(1) + chunk_size(4 BE)
 //   [청크 0]  nonce(12) + ciphertext(≤chunk_size) + tag(16)
 //   [청크 1]  ...
@@ -24,7 +28,8 @@ const TAG_LEN: usize = 16;
 pub const CHUNK_SIZE: u32 = 1_048_576; // 1MB 평문 단위
 pub const FILE_HEADER_SIZE: usize = 8;
 pub const MAGIC: [u8; 2] = *b"SV";
-const FORMAT_V1: u8 = 1;
+/// 청크 포맷 버전 (레거시 = 매직 없음, SV 매직 + 이 버전 = 청크)
+pub const FORMAT_V1: u8 = 1;
 
 pub struct ChunkedHeader {
     pub version: u8,

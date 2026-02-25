@@ -1,6 +1,11 @@
 // ============================================
 // vault_files.rs - 파일 입고/출고 (이동 + 암호화/복호화)
 // 입고: 원본 삭제 | 출고: 금고에서 삭제
+//
+// 물리 파일 형식:
+//   - 레거시: 전체 파일을 crypto::encrypt 한 블롭 (매직 없음). header_encrypted 있으면 DB 헤더 + 본문 복호화 합침.
+//   - 청크: crypto SV 포맷 [8B 헤더][청크0][청크1]... 신규 업로드는 모두 청크.
+//   - Phase 3 (header_encrypted): 청크 파일의 평문 = [더미 1~8KB][원본 나머지]. DB에 헤더 암호화 저장, 물리에는 더미+청크.
 // ============================================
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
@@ -11,10 +16,13 @@ use rusqlite::Connection;
 use std::fs;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
+use rand::RngCore;
 
 const DATA_DIR: &str = "data";
 /// 썸네일 생성용 최대 읽기 크기 (대형 파일은 앞부분만 읽어서 시도)
 const THUMB_MAX_READ: u64 = 100 * 1024 * 1024;
+/// Phase 3: 물리 파일에서 분리해 DB에 넣을 헤더 크기 (파일 종류 추측 방지)
+const STEALTH_HEADER_LEN: usize = 8192;
 
 /// 금고 data 폴더 경로
 fn data_dir(base: &Path) -> std::path::PathBuf {
@@ -70,6 +78,21 @@ fn decrypt_field(
     }
 }
 
+/// created_at 값 복호화 (ENC: 문자열 또는 레거시 정수 문자열 → i64)
+fn decrypt_created_at(s: &str, dek: Option<&[u8; crypto::KEY_LEN]>) -> Result<i64, String> {
+    if let Some(b64) = s.strip_prefix(ENC_PREFIX) {
+        let dek = dek.ok_or("DEK 없음")?;
+        let bytes = BASE64.decode(b64).map_err(|e: base64::DecodeError| e.to_string())?;
+        let dec = crypto::decrypt(&bytes, dek)?;
+        String::from_utf8(dec)
+            .map_err(|e: std::string::FromUtf8Error| e.to_string())?
+            .parse()
+            .map_err(|e: std::num::ParseIntError| e.to_string())
+    } else {
+        s.parse().map_err(|e: std::num::ParseIntError| e.to_string())
+    }
+}
+
 /// header_encrypted blob 파싱 (레거시 파일 호환용) → (header_len, encrypted_bytes)
 fn parse_header_encrypted(blob: &[u8]) -> Result<(u16, &[u8]), String> {
     if blob.len() < 2 {
@@ -100,6 +123,59 @@ fn decrypt_file_full(
     plaintext.extend_from_slice(&header);
     plaintext.extend_from_slice(&body);
     Ok(plaintext)
+}
+
+/// Phase 3: [랜덤 N바이트][파일 offset N~끝] 순서로 읽는 Reader (업로드 시 물리 파일에 더미 헤더 쓰기 위함)
+struct DummyHeaderThenFileReader {
+    dummy: Vec<u8>,
+    dummy_pos: usize,
+    file: fs::File,
+}
+
+impl Read for DummyHeaderThenFileReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.dummy_pos < self.dummy.len() {
+            let n = (self.dummy.len() - self.dummy_pos).min(buf.len());
+            buf[..n].copy_from_slice(&self.dummy[self.dummy_pos..self.dummy_pos + n]);
+            self.dummy_pos += n;
+            return Ok(n);
+        }
+        self.file.read(buf)
+    }
+}
+
+/// Phase 3: 처음 skip_len 바이트는 버리고, 그 다음부터만 inner에 전달하는 Writer
+struct SkipWriter<W: Write> {
+    skip_len: usize,
+    skipped: usize,
+    inner: W,
+}
+
+impl<W: Write> SkipWriter<W> {
+    fn new(skip_len: usize, inner: W) -> Self {
+        Self {
+            skip_len,
+            skipped: 0,
+            inner,
+        }
+    }
+}
+
+impl<W: Write> Write for SkipWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.skipped >= self.skip_len {
+            return self.inner.write(buf);
+        }
+        let to_skip = (self.skip_len - self.skipped).min(buf.len());
+        self.skipped += to_skip;
+        if to_skip < buf.len() {
+            self.inner.write_all(&buf[to_skip..])?;
+        }
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
 }
 
 /// 썸네일 생성. 이미지: 디코딩 실패 시 Err(업로드 중단). 음악/영상/기타: 실패 시 Ok(None).
@@ -179,27 +255,59 @@ pub fn vault_move_file(
     let do_upload = || -> Result<String, String> {
         let file_kind = thumbnails::file_kind_from_ext(Path::new(&original_name));
 
-        // 썸네일: 소형 파일은 전체, 대형 파일은 앞부분만 읽어서 시도
-        let thumbnail_plain = {
-            let file_len = fs::metadata(&temp_path).map_err(|e| e.to_string())?.len();
-            let read_len = file_len.min(THUMB_MAX_READ) as usize;
+        let file_len = fs::metadata(&temp_path).map_err(|e| e.to_string())?.len();
+        let read_len = file_len.min(THUMB_MAX_READ) as usize;
+        let mut head_buf = vec![0u8; read_len];
+        {
             let mut f = fs::File::open(&temp_path).map_err(|e| e.to_string())?;
-            let mut buf = vec![0u8; read_len];
-            f.read_exact(&mut buf).map_err(|e| e.to_string())?;
-            if file_len <= THUMB_MAX_READ {
-                make_thumbnail(&buf, Path::new(&original_name))?
-            } else {
-                make_thumbnail(&buf, Path::new(&original_name)).unwrap_or(None)
-            }
+            f.read_exact(&mut head_buf).map_err(|e| e.to_string())?;
+        }
+
+        // 썸네일
+        let thumbnail_plain = if file_len <= THUMB_MAX_READ {
+            make_thumbnail(&head_buf, Path::new(&original_name))?
+        } else {
+            make_thumbnail(&head_buf, Path::new(&original_name)).unwrap_or(None)
+        };
+
+        // Phase 3: 헤더 분리 (1~8KB) → DB에 암호화 저장, 물리 파일에는 더미+본문만 청크 암호화
+        let header_len_actual = if file_len == 0 {
+            0
+        } else {
+            (STEALTH_HEADER_LEN as u64).min(file_len) as usize
+        };
+        let header_encrypted_blob: Option<Vec<u8>> = if header_len_actual > 0 {
+            let header_plain = head_buf[..header_len_actual.min(head_buf.len())].to_vec();
+            let enc = crypto::encrypt(&header_plain, &dek)?;
+            let mut blob = (header_len_actual as u16).to_be_bytes().to_vec();
+            blob.extend_from_slice(&enc);
+            Some(blob)
+        } else {
+            None
         };
 
         // 청크 스트리밍 암호화 (메모리 = 1MB)
         let hash_name = format!("{}.dat", id);
         let dest_file = data_path.join(&hash_name);
-        {
-            let src = fs::File::open(&temp_path).map_err(|e| e.to_string())?;
+        if header_len_actual > 0 {
+            let mut dummy = vec![0u8; header_len_actual];
+            rand::thread_rng().fill_bytes(&mut dummy);
+            let mut file = fs::File::open(&temp_path).map_err(|e| e.to_string())?;
+            file.seek(SeekFrom::Start(header_len_actual as u64))
+                .map_err(|e| e.to_string())?;
+            let comb = DummyHeaderThenFileReader {
+                dummy,
+                dummy_pos: 0,
+                file,
+            };
+            let mut reader = BufReader::new(comb);
             let dst = fs::File::create(&dest_file).map_err(|e| e.to_string())?;
+            let mut writer = BufWriter::new(dst);
+            crypto::encrypt_file_chunked(&mut reader, &mut writer, &dek, crypto::CHUNK_SIZE)?;
+        } else {
+            let src = fs::File::open(&temp_path).map_err(|e| e.to_string())?;
             let mut reader = BufReader::new(src);
+            let dst = fs::File::create(&dest_file).map_err(|e| e.to_string())?;
             let mut writer = BufWriter::new(dst);
             crypto::encrypt_file_chunked(&mut reader, &mut writer, &dek, crypto::CHUNK_SIZE)?;
         }
@@ -211,6 +319,8 @@ pub fn vault_move_file(
 
         let original_name_enc = encrypt_field(&original_name, &dek)?;
         let original_path_enc = encrypt_field(&original_path_str, &dek)?;
+        let mime_type_enc = encrypt_field(&mime_from_name(&original_name), &dek)?;
+        let created_at_enc = encrypt_field(&created_at.to_string(), &dek)?;
 
         let thumbnail_encrypted = thumbnail_plain
             .as_ref()
@@ -229,31 +339,31 @@ pub fn vault_move_file(
 
         let tx_result = (|| -> Result<(), String> {
             conn.execute(
-                "INSERT INTO files (id, folder_id, original_name, original_path, hash_name, mime_type, size_bytes, thumbnail_blob, header_encrypted, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                "INSERT INTO files (id, folder_id, original_name, original_path, hash_name, mime_type, size_bytes, thumbnail_blob, header_encrypted, created_at, created_at_enc) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10)",
                 rusqlite::params![
                     id,
                     folder_id,
                     original_name_enc,
                     original_path_enc,
                     hash_name,
-                    None::<String>,
+                    mime_type_enc,
                     size_bytes,
                     thumbnail_encrypted,
-                    None::<Vec<u8>>,
-                    created_at,
+                    header_encrypted_blob,
+                    created_at_enc,
                 ],
             )
             .map_err(|e| e.to_string())?;
 
             conn.execute(
-                "INSERT INTO files_index (id, folder_id, hash_name, display_name, thumbnail_blob, created_at, file_kind, size_bytes) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO files_index (id, folder_id, hash_name, display_name, thumbnail_blob, created_at, created_at_enc, file_kind, size_bytes) VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8)",
                 rusqlite::params![
                     id,
                     folder_id,
                     hash_name,
                     original_name,
                     thumbnail_plain,
-                    created_at,
+                    created_at_enc,
                     file_kind_str,
                     size_bytes,
                 ],
@@ -303,8 +413,20 @@ fn decrypt_to_writer(
     file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
 
     if crypto::is_chunked(&magic) {
-        let mut reader = BufReader::new(file);
-        crypto::decrypt_file_chunked(&mut reader, writer, dek)
+        if let Some(blob) = header_encrypted {
+            let (header_len_u16, enc_header) = parse_header_encrypted(blob)?;
+            let header_len = header_len_u16 as usize;
+            let header_plain = crypto::decrypt(enc_header, dek)?;
+            writer.write_all(&header_plain).map_err(|e| e.to_string())?;
+            let mut skip_w = SkipWriter::new(header_len, writer);
+            let mut reader = BufReader::new(file);
+            crypto::decrypt_file_chunked(&mut reader, &mut skip_w, dek)?;
+            Ok(())
+        } else {
+            let mut reader = BufReader::new(file);
+            crypto::decrypt_file_chunked(&mut reader, writer, dek)?;
+            Ok(())
+        }
     } else {
         let mut physical = Vec::new();
         file.read_to_end(&mut physical).map_err(|e| e.to_string())?;
@@ -326,7 +448,7 @@ fn decrypt_to_vec(
 }
 
 /// 파일 목록용 아이템
-#[derive(serde::Serialize)]
+#[derive(Clone, serde::Serialize)]
 pub struct FileItem {
     pub id: String,
     pub original_name: String,
@@ -420,14 +542,14 @@ pub fn backfill_files_index(base: &Path) -> Result<(), String> {
     let conn = conn(base)?;
 
     // 1) files_index에 아예 없는 항목 삽입
-    let to_backfill: Vec<(String, String, Option<Vec<u8>>, i64, i64)> = conn
-        .prepare("SELECT f.id, f.original_name, f.thumbnail_blob, f.created_at, f.size_bytes FROM files f WHERE f.id NOT IN (SELECT id FROM files_index)")
+    let to_backfill: Vec<(String, String, Option<Vec<u8>>, i64, Option<String>, i64)> = conn
+        .prepare("SELECT f.id, f.original_name, f.thumbnail_blob, f.created_at, f.created_at_enc, f.size_bytes FROM files f WHERE f.id NOT IN (SELECT id FROM files_index)")
         .map_err(|e| e.to_string())?
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
-    for (id, name_raw, thumb_enc, created_at, size_bytes) in to_backfill {
+    for (id, name_raw, thumb_enc, created_at, created_at_enc, size_bytes) in to_backfill {
         let display_name = decrypt_field(&name_raw, Some(&dek)).unwrap_or_else(|_| name_raw.clone());
         let file_kind = thumbnails::file_kind_from_ext(Path::new(&display_name));
         let file_kind_str = match file_kind {
@@ -441,8 +563,8 @@ pub fn backfill_files_index(base: &Path) -> Result<(), String> {
         let folder_id: Option<String> = conn.query_row("SELECT folder_id FROM files WHERE id = ?1", [&id], |r| r.get(0)).ok();
         let thumb_plain = thumb_enc.and_then(|enc| crypto::decrypt(&enc, &dek).ok());
         let _ = conn.execute(
-            "INSERT OR IGNORE INTO files_index (id, folder_id, hash_name, display_name, thumbnail_blob, created_at, file_kind, size_bytes) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            rusqlite::params![id, folder_id, hash_name, display_name, thumb_plain, created_at, file_kind_str, size_bytes],
+            "INSERT OR IGNORE INTO files_index (id, folder_id, hash_name, display_name, thumbnail_blob, created_at, created_at_enc, file_kind, size_bytes) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            rusqlite::params![id, folder_id, hash_name, display_name, thumb_plain, created_at, created_at_enc, file_kind_str, size_bytes],
         );
     }
 
@@ -466,35 +588,110 @@ pub fn backfill_files_index(base: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// 파일 목록: index 테이블만 읽음 (복호화 없음)
-pub fn list_files(base: &Path, folder_id: Option<&str>) -> Result<Vec<FileItem>, String> {
+/// 파일 목록 개수 (페이징/가상 리스트용)
+pub fn list_files_count(base: &Path, folder_id: Option<&str>) -> Result<u64, String> {
     let conn = conn(base)?;
+    let total: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM files_index WHERE (folder_id IS ?1 OR (folder_id IS NULL AND ?1 IS NULL))",
+            rusqlite::params![folder_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(total.max(0) as u64)
+}
+
+/// 파일 목록 한 페이지: (id, created_at_enc)로 정렬 후 [offset..offset+limit]만 풀 row 조회.
+pub fn list_files_page(
+    base: &Path,
+    folder_id: Option<&str>,
+    limit: u32,
+    offset: u32,
+) -> Result<(Vec<FileItem>, u64), String> {
+    let dek = key_cache::get_dek()
+        .ok_or("암호화 키가 없습니다. 금고를 열어주세요.")?;
+    let conn = conn(base)?;
+    let total = list_files_count(base, folder_id)?;
+
     let mut stmt = conn
         .prepare(
-            "SELECT id, display_name, size_bytes, created_at, thumbnail_blob, file_kind FROM files_index WHERE (folder_id IS ?1 OR (folder_id IS NULL AND ?1 IS NULL)) ORDER BY created_at DESC",
+            "SELECT id, created_at, created_at_enc FROM files_index WHERE (folder_id IS ?1 OR (folder_id IS NULL AND ?1 IS NULL))",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(rusqlite::params![folder_id], |r| {
             let id: String = r.get(0)?;
-            let display_name: String = r.get(1)?;
-            let size_bytes: i64 = r.get(2)?;
-            let created_at: i64 = r.get(3)?;
-            let thumb_blob: Option<Vec<u8>> = r.get(4)?;
-            let file_kind_str: String = r.get(5)?;
-            let file_kind = parse_file_kind(&file_kind_str);
-            let thumbnail_base64 = thumb_blob.map(|b| BASE64.encode(&b));
-            Ok(FileItem {
-                id,
-                original_name: display_name,
-                size_bytes,
-                created_at,
-                file_kind,
-                thumbnail_base64,
-            })
+            let created_at_legacy: i64 = r.get::<_, i64>(1).unwrap_or(0);
+            let created_at_enc: Option<String> = r.get(2).ok();
+            let created_at = created_at_enc
+                .as_deref()
+                .and_then(|s| decrypt_created_at(s, Some(&dek)).ok())
+                .unwrap_or(created_at_legacy);
+            Ok((id, created_at))
         })
         .map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    let mut order: Vec<(String, i64)> = rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+    order.sort_by(|a, b| b.1.cmp(&a.1));
+
+    let limit = limit.min(500) as usize;
+    let offset = offset as usize;
+    let ids: Vec<&str> = order
+        .iter()
+        .skip(offset)
+        .take(limit)
+        .map(|(id, _)| id.as_str())
+        .collect();
+    if ids.is_empty() {
+        return Ok((Vec::new(), total));
+    }
+
+    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT id, display_name, size_bytes, created_at, created_at_enc, thumbnail_blob, file_kind FROM files_index WHERE id IN ({})",
+        placeholders
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let id_to_item: std::collections::HashMap<String, FileItem> = stmt
+        .query_map(rusqlite::params_from_iter(ids.iter().copied()), |row| {
+            let id: String = row.get(0)?;
+            let display_name: String = row.get(1)?;
+            let size_bytes: i64 = row.get(2)?;
+            let created_at_legacy: i64 = row.get::<_, i64>(3).unwrap_or(0);
+            let created_at_enc: Option<String> = row.get(4).ok();
+            let thumb_blob: Option<Vec<u8>> = row.get(5)?;
+            let file_kind_str: String = row.get(6)?;
+            let file_kind = parse_file_kind(&file_kind_str);
+            let thumbnail_base64 = thumb_blob.map(|b| BASE64.encode(&b));
+            let created_at = created_at_enc
+                .as_deref()
+                .and_then(|s| decrypt_created_at(s, Some(&dek)).ok())
+                .unwrap_or(created_at_legacy);
+            Ok((
+                id.clone(),
+                FileItem {
+                    id,
+                    original_name: display_name,
+                    size_bytes,
+                    created_at,
+                    file_kind,
+                    thumbnail_base64,
+                },
+            ))
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<std::collections::HashMap<_, _>, _>>()
+        .map_err(|e| e.to_string())?;
+    let items: Vec<FileItem> = ids
+        .iter()
+        .filter_map(|&id| id_to_item.get(id).cloned())
+        .collect();
+    Ok((items, total))
+}
+
+/// 파일 목록 전체 반환 (limit/offset 없이 한 번에, 기존 호환)
+pub fn list_files(base: &Path, folder_id: Option<&str>) -> Result<Vec<FileItem>, String> {
+    let (items, _) = list_files_page(base, folder_id, 100_000, 0)?;
+    Ok(items)
 }
 
 fn parse_file_kind(s: &str) -> thumbnails::FileKind {
@@ -935,6 +1132,18 @@ pub fn get_stream_info(base: &Path, file_id: &str) -> Result<StreamFileInfo, Str
         )
         .unwrap_or_else(|_| "file".into());
 
+    let mime_type: String = conn
+        .query_row("SELECT mime_type FROM files WHERE id = ?1", [file_id], |r| r.get(0))
+        .ok()
+        .and_then(|s: String| {
+            if s.starts_with(ENC_PREFIX) {
+                key_cache::get_dek().and_then(|dek| decrypt_field(&s, Some(&dek)).ok())
+            } else {
+                Some(s)
+            }
+        })
+        .unwrap_or_else(|| mime_from_name(&display_name));
+
     let enc_path = data_dir(base).join(&hash_name);
     if !enc_path.exists() {
         return Err("암호화된 파일이 없습니다.".into());
@@ -954,8 +1163,6 @@ pub fn get_stream_info(base: &Path, file_id: &str) -> Result<StreamFileInfo, Str
         (false, 0)
     };
 
-    let mime_type = mime_from_name(&display_name);
-
     Ok(StreamFileInfo {
         enc_path,
         size_bytes: size_bytes as u64,
@@ -965,8 +1172,56 @@ pub fn get_stream_info(base: &Path, file_id: &str) -> Result<StreamFileInfo, Str
     })
 }
 
-/// 청크 파일에서 Range [start, end] (inclusive) 복호화
+/// 청크 파일에서 Range [start, end] (inclusive) 복호화.
+/// header_encrypted가 있으면 논리 파일 = (DB 헤더) + (청크 본문, 앞 header_len 스킵).
 pub fn decrypt_range(
+    enc_path: &Path,
+    dek: &[u8; crypto::KEY_LEN],
+    chunk_size: u32,
+    header_encrypted: Option<&[u8]>,
+    start: u64,
+    end: u64,
+) -> Result<Vec<u8>, String> {
+    let Some(blob) = header_encrypted else {
+        return decrypt_range_body_only(enc_path, dek, chunk_size, start, end);
+    };
+    let (header_len_u16, enc_header) = parse_header_encrypted(blob)?;
+    let header_len = header_len_u16 as usize;
+    let header_plain = crypto::decrypt(enc_header, dek)?;
+    let header_len_u = header_len as u64;
+
+    if end < header_len_u {
+        let e = (end as usize + 1).min(header_plain.len());
+        let s = start as usize;
+        return Ok(header_plain[s..e].to_vec());
+    }
+    // 본문 구간: 물리 스트림 = [더미 header_len][본문] 이므로 본문 byte 0 = 물리 byte header_len
+    if start >= header_len_u {
+        let body_start = start - header_len_u;
+        let body_end = end - header_len_u;
+        return decrypt_range_body_only(
+            enc_path,
+            dek,
+            chunk_size,
+            header_len_u + body_start,
+            header_len_u + body_end,
+        );
+    }
+    let mut result = header_plain[start as usize..].to_vec();
+    let body_end = end - header_len_u;
+    let body_bytes = decrypt_range_body_only(
+        enc_path,
+        dek,
+        chunk_size,
+        header_len_u,
+        header_len_u + body_end,
+    )?;
+    result.extend_from_slice(&body_bytes);
+    Ok(result)
+}
+
+/// 청크 평문 스트림 기준 [start, end] (inclusive) 복호화. start/end = 청크 복호화 스트림의 바이트 오프셋.
+fn decrypt_range_body_only(
     enc_path: &Path,
     dek: &[u8; crypto::KEY_LEN],
     chunk_size: u32,
@@ -974,21 +1229,19 @@ pub fn decrypt_range(
     end: u64,
 ) -> Result<Vec<u8>, String> {
     let mut file = fs::File::open(enc_path).map_err(|e| e.to_string())?;
-    let cs = chunk_size as u64;
-    let first = start / cs;
-    let last = end / cs;
+    let (first, offset_in_first) = crypto::byte_to_chunk(start, chunk_size);
+    let (last, offset_in_last) = crypto::byte_to_chunk(end, chunk_size);
 
     let mut result = Vec::with_capacity((end - start + 1) as usize);
     for i in first..=last {
         let plain = crypto::decrypt_chunk_at(&mut file, dek, i, chunk_size)?;
-        let chunk_offset = i * cs;
         let slice_start = if i == first {
-            (start - chunk_offset) as usize
+            offset_in_first
         } else {
             0
         };
         let slice_end = if i == last {
-            ((end - chunk_offset) as usize + 1).min(plain.len())
+            (offset_in_last + 1).min(plain.len())
         } else {
             plain.len()
         };
