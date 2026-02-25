@@ -9,6 +9,9 @@
     "beforeBuildCommand": "npm run build --prefix frontend",
     "frontendDist": "../frontend/dist"
   },
+  "bundle": {
+    "active": true
+  },
   "app": {
     "windows": [
       {
@@ -19,8 +22,6 @@
         "minHeight": 550
       }
     ],
-    "security": {
-      "csp": null
-    }
+    "security": { "csp": null }
   }
 }
