@@ -1,3 +1,4 @@
+import { VAULT_FILES_CHANGED } from '@/components/organisms/SidebarStorage/SidebarStorage';
 import { invoke } from '@tauri-apps/api/core';
 import {
   ChevronRight,
@@ -7,7 +8,7 @@ import {
   Pencil,
   Trash2,
 } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 interface FolderItem {
   id: string;
@@ -32,6 +33,11 @@ export default function SidebarFolderTree({
   const [folders, setFolders] = useState<FolderItem[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
+  const [menuPos, setMenuPos] = useState<{ x: number; y: number }>({
+    x: 0,
+    y: 0,
+  });
+  const menuRef = useRef<HTMLDivElement>(null);
   const [creating, setCreating] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [newName, setNewName] = useState('');
@@ -52,6 +58,12 @@ export default function SidebarFolderTree({
 
   useEffect(() => {
     load();
+  }, [load]);
+
+  useEffect(() => {
+    const onChanged = () => load();
+    window.addEventListener(VAULT_FILES_CHANGED, onChanged);
+    return () => window.removeEventListener(VAULT_FILES_CHANGED, onChanged);
   }, [load]);
 
   type TreeNode = { item: FolderItem; children: TreeNode[] };
@@ -115,6 +127,17 @@ export default function SidebarFolderTree({
       //
     }
   };
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(null);
+      }
+    };
+    window.addEventListener('mousedown', handler);
+    return () => window.removeEventListener('mousedown', handler);
+  }, [menuOpen]);
 
   const toggleExpand = (id: string) => {
     setExpanded((s) => {
@@ -190,44 +213,22 @@ export default function SidebarFolderTree({
               >
                 <FolderPlus size={12} />
               </button>
-              <div className="relative">
-                <button
-                  type="button"
-                  className="p-1 rounded hover:bg-background/20"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setMenuOpen(isMenu ? null : item.id);
-                  }}
-                >
-                  <MoreVertical size={12} />
-                </button>
-                {isMenu && (
-                  <div className="absolute left-0 top-full mt-0.5 z-50 bg-popover border border-border rounded-md shadow-lg py-1 min-w-[100px]">
-                    <button
-                      type="button"
-                      className="w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 hover:bg-accent"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setNewName(item.name);
-                        setMenuOpen(null);
-                        setRenaming(item.id);
-                      }}
-                    >
-                      <Pencil size={12} /> 이름 변경
-                    </button>
-                    <button
-                      type="button"
-                      className="w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 hover:bg-destructive/20 text-destructive"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDelete(item.id);
-                      }}
-                    >
-                      <Trash2 size={12} /> 삭제
-                    </button>
-                  </div>
-                )}
-              </div>
+              <button
+                type="button"
+                className="p-1 rounded hover:bg-background/20"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (isMenu) {
+                    setMenuOpen(null);
+                  } else {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    setMenuPos({ x: rect.left, y: rect.bottom + 2 });
+                    setMenuOpen(item.id);
+                  }
+                }}
+              >
+                <MoreVertical size={12} />
+              </button>
             </div>
           </div>
           {isCreatingChild && (
@@ -257,6 +258,8 @@ export default function SidebarFolderTree({
       );
     });
   };
+
+  const menuFolder = menuOpen ? folders.find((f) => f.id === menuOpen) : null;
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto py-2">
@@ -302,6 +305,37 @@ export default function SidebarFolderTree({
         </div>
       ) : (
         renderNode(rootChildren)
+      )}
+
+      {menuOpen && menuFolder && (
+        <div
+          ref={menuRef}
+          className="fixed z-[100] bg-popover border border-border rounded-md shadow-lg py-1 min-w-[100px]"
+          style={{ left: menuPos.x, top: menuPos.y }}
+        >
+          <button
+            type="button"
+            className="w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 hover:bg-accent"
+            onClick={(e) => {
+              e.stopPropagation();
+              setNewName(menuFolder.name);
+              setMenuOpen(null);
+              setRenaming(menuFolder.id);
+            }}
+          >
+            <Pencil size={12} /> 이름 변경
+          </button>
+          <button
+            type="button"
+            className="w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 hover:bg-destructive/20 text-destructive"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleDelete(menuFolder.id);
+            }}
+          >
+            <Trash2 size={12} /> 삭제
+          </button>
+        </div>
       )}
     </div>
   );

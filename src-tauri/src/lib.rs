@@ -194,6 +194,45 @@ fn vault_move_file(source_path: String, folder_id: Option<String>) -> Result<Str
     )
 }
 
+/// 폴더 업로드 (재귀)
+#[tauri::command]
+fn vault_move_folder(source_path: String, folder_id: Option<String>) -> Result<(usize, usize), String> {
+    let path = parse_file_path(&source_path);
+    vault_files::vault_move_folder(
+        &vault_base_path(),
+        path.as_path(),
+        folder_id.as_deref(),
+    )
+}
+
+/// 파일 삭제 (금고에서 영구 제거)
+#[tauri::command]
+fn vault_delete_file(file_id: String) -> Result<(), String> {
+    vault_files::vault_delete_file(&vault_base_path(), &file_id)
+}
+
+/// 파일 이름 변경
+#[tauri::command]
+fn vault_rename_file(file_id: String, new_name: String) -> Result<(), String> {
+    vault_files::vault_rename_file(&vault_base_path(), &file_id, &new_name)
+}
+
+/// 파일 폴더 이동
+#[tauri::command]
+fn vault_change_folder(file_id: String, folder_id: Option<String>) -> Result<(), String> {
+    vault_files::vault_change_folder(&vault_base_path(), &file_id, folder_id.as_deref())
+}
+
+/// 압축 해제 (금고 내)
+#[tauri::command]
+fn vault_extract_archive(file_id: String, folder_id: Option<String>) -> Result<(usize, usize), String> {
+    vault_files::vault_extract_archive(
+        &vault_base_path(),
+        &file_id,
+        folder_id.as_deref(),
+    )
+}
+
 /// 썸네일 없을 때 on-demand 생성
 #[tauri::command]
 fn get_file_thumbnail(file_id: String) -> Result<Option<String>, String> {
@@ -216,6 +255,26 @@ fn list_files(folder_id: Option<String>) -> Result<Vec<vault_files::FileItem>, S
 #[tauri::command]
 fn vault_extract_file(file_id: String, dest_path: String) -> Result<(), String> {
     vault_files::vault_extract_file(
+        &vault_base_path(),
+        &file_id,
+        PathBuf::from(&dest_path).as_path(),
+    )
+}
+
+/// 폴더 내보내기 (재귀)
+#[tauri::command]
+fn vault_extract_folder(folder_id: String, dest_path: String) -> Result<(usize, usize), String> {
+    vault_files::vault_extract_folder(
+        &vault_base_path(),
+        &folder_id,
+        PathBuf::from(&dest_path).as_path(),
+    )
+}
+
+/// 파일 복사 내보내기 (금고에서 삭제하지 않음)
+#[tauri::command]
+fn vault_copy_out(file_id: String, dest_path: String) -> Result<(), String> {
+    vault_files::vault_copy_out(
         &vault_base_path(),
         &file_id,
         PathBuf::from(&dest_path).as_path(),
@@ -395,10 +454,17 @@ pub fn run() {
             rename_folder,
             delete_folder,
             vault_move_file,
+            vault_move_folder,
+            vault_extract_archive,
+            vault_delete_file,
+            vault_rename_file,
+            vault_change_folder,
             get_file_thumbnail,
             get_file_data,
             list_files,
             vault_extract_file,
+            vault_extract_folder,
+            vault_copy_out,
             vault_prepare_drag_out,
             vault_confirm_drag_out
         ])

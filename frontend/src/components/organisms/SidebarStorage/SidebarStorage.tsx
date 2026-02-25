@@ -15,7 +15,7 @@ function isTauriEnv(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
 
-const VAULT_FILES_CHANGED = 'vault-files-changed';
+export const VAULT_FILES_CHANGED = 'vault-files-changed';
 
 export function dispatchVaultFilesChanged() {
   window.dispatchEvent(new CustomEvent(VAULT_FILES_CHANGED));

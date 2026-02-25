@@ -545,6 +545,94 @@ pub fn vault_extract_file(
     Ok(())
 }
 
+/// 폴더 내보내기 (재귀: 하위 파일+폴더 전부 복호화하여 내보내고 금고에서 삭제)
+pub fn vault_extract_folder(
+    base: &Path,
+    folder_id: &str,
+    dest_dir: &Path,
+) -> Result<(usize, usize), String> {
+    let conn = conn(base)?;
+
+    let folder_name: String = conn
+        .query_row(
+            "SELECT name FROM folders WHERE id = ?1",
+            [folder_id],
+            |r| r.get(0),
+        )
+        .map_err(|_| "폴더를 찾을 수 없습니다.".to_string())?;
+
+    let out_dir = dest_dir.join(&folder_name);
+    fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+
+    let file_ids: Vec<(String, String)> = {
+        let mut stmt = conn
+            .prepare("SELECT id, display_name FROM files_index WHERE folder_id = ?1")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([folder_id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(|e| e.to_string())?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+
+    let mut file_count = 0usize;
+    for (fid, display_name) in &file_ids {
+        let file_dest = out_dir.join(display_name);
+        match vault_extract_file(base, fid, &file_dest) {
+            Ok(()) => file_count += 1,
+            Err(e) => eprintln!("폴더 내보내기 중 파일 실패: {} - {}", display_name, e),
+        }
+    }
+
+    let child_ids: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT id FROM folders WHERE parent_id = ?1")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([folder_id], |r| r.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+
+    let mut folder_count = 1usize;
+    for child_id in &child_ids {
+        let (fc, dc) = vault_extract_folder(base, child_id, &out_dir)?;
+        file_count += fc;
+        folder_count += dc;
+    }
+
+    let _ = conn.execute("DELETE FROM folders WHERE id = ?1", [folder_id]);
+
+    Ok((file_count, folder_count))
+}
+
+/// 파일 복사 내보내기 (금고에서 삭제하지 않음)
+pub fn vault_copy_out(
+    base: &Path,
+    file_id: &str,
+    dest_path: &Path,
+) -> Result<(), String> {
+    let dek = key_cache::get_dek()
+        .ok_or("암호화 키가 없습니다. 금고를 잠근 후 비밀번호로 다시 열어주세요.")?;
+
+    let conn = conn(base)?;
+    let (hash_name, header_enc): (String, Option<Vec<u8>>) = conn
+        .query_row(
+            "SELECT hash_name, header_encrypted FROM files WHERE id = ?1",
+            [file_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|_| "파일을 찾을 수 없습니다.")?;
+
+    let enc_path = data_dir(base).join(&hash_name);
+    if !enc_path.exists() {
+        return Err("암호화된 파일이 없습니다.".into());
+    }
+
+    let dest = fs::File::create(dest_path).map_err(|e| e.to_string())?;
+    let mut writer = BufWriter::new(dest);
+    decrypt_to_writer(&enc_path, header_enc.as_deref(), &dek, &mut writer)?;
+
+    Ok(())
+}
+
 /// 드래그아웃용: 임시 경로에 스트리밍 복호화 후 경로 반환
 pub fn vault_prepare_drag_out(base: &Path, file_id: &str) -> Result<String, String> {
     let dek = key_cache::get_dek()
@@ -612,6 +700,210 @@ pub fn vault_confirm_drag_out(base: &Path, file_id: &str) -> Result<(), String> 
     }
 
     Ok(())
+}
+
+// ===================== 파일 관리 (삭제/이름변경/이동) =====================
+
+/// 파일 영구 삭제 (금고에서 완전히 제거)
+pub fn vault_delete_file(base: &Path, file_id: &str) -> Result<(), String> {
+    let conn = conn(base)?;
+    let hash_name: String = conn
+        .query_row(
+            "SELECT hash_name FROM files WHERE id = ?1",
+            [file_id],
+            |r| r.get(0),
+        )
+        .map_err(|_| "파일을 찾을 수 없습니다.".to_string())?;
+
+    let enc_path = data_dir(base).join(&hash_name);
+    if enc_path.exists() {
+        secure_delete(&enc_path)?;
+    }
+
+    conn.execute("DELETE FROM files WHERE id = ?1", [file_id])
+        .map_err(|e| e.to_string())?;
+    let _ = conn.execute("DELETE FROM files_index WHERE id = ?1", [file_id]);
+    Ok(())
+}
+
+/// 파일 이름 변경
+pub fn vault_rename_file(base: &Path, file_id: &str, new_name: &str) -> Result<(), String> {
+    let name = new_name.trim();
+    if name.is_empty() {
+        return Err("파일 이름을 입력해주세요.".into());
+    }
+    let conn = conn(base)?;
+    conn.execute(
+        "UPDATE files_index SET display_name = ?1 WHERE id = ?2",
+        rusqlite::params![name, file_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 파일을 다른 폴더로 이동
+pub fn vault_change_folder(base: &Path, file_id: &str, folder_id: Option<&str>) -> Result<(), String> {
+    let conn = conn(base)?;
+    conn.execute(
+        "UPDATE files_index SET folder_id = ?1 WHERE id = ?2",
+        rusqlite::params![folder_id, file_id],
+    )
+    .map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE files SET folder_id = ?1 WHERE id = ?2",
+        rusqlite::params![folder_id, file_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ===================== 폴더 업로드 (재귀) =====================
+
+/// 폴더 전체를 금고에 재귀적으로 업로드
+pub fn vault_move_folder(
+    base: &Path,
+    source_path: &Path,
+    parent_folder_id: Option<&str>,
+) -> Result<(usize, usize), String> {
+    if !source_path.exists() {
+        return Err("원본 폴더를 찾을 수 없습니다.".into());
+    }
+    let meta = fs::metadata(source_path).map_err(|e| e.to_string())?;
+    if !meta.is_dir() {
+        return Err("폴더가 아닙니다.".into());
+    }
+
+    let folder_name = source_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("folder")
+        .to_string();
+
+    let created = crate::folders::create_folder(base, &folder_name, parent_folder_id)?;
+    let new_folder_id = created.id;
+
+    let mut file_count = 0usize;
+    let mut folder_count = 1usize;
+
+    let entries: Vec<_> = fs::read_dir(source_path)
+        .map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok())
+        .collect();
+
+    for entry in entries {
+        let path = entry.path();
+        if path.is_dir() {
+            let (fc, dc) = vault_move_folder(base, &path, Some(&new_folder_id))?;
+            file_count += fc;
+            folder_count += dc;
+        } else if path.is_file() {
+            match vault_move_file(base, &path, Some(&new_folder_id)) {
+                Ok(_) => file_count += 1,
+                Err(e) => {
+                    eprintln!("폴더 업로드 중 파일 실패: {:?} - {}", path, e);
+                }
+            }
+        }
+    }
+
+    let _ = fs::remove_dir_all(source_path);
+
+    Ok((file_count, folder_count))
+}
+
+// ===================== 압축 해제 (금고 내) =====================
+
+/// 금고에 저장된 ZIP 파일을 금고 내에서 해제
+pub fn vault_extract_archive(
+    base: &Path,
+    file_id: &str,
+    target_folder_id: Option<&str>,
+) -> Result<(usize, usize), String> {
+    let dek = key_cache::get_dek()
+        .ok_or("암호화 키가 없습니다. 금고를 잠근 후 비밀번호로 다시 열어주세요.")?;
+
+    let conn = conn(base)?;
+    let (hash_name, display_name): (String, String) = conn
+        .query_row(
+            "SELECT hash_name, display_name FROM files_index WHERE id = ?1",
+            [file_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|_| "파일을 찾을 수 없습니다.".to_string())?;
+
+    let enc_path = data_dir(base).join(&hash_name);
+
+    let header_enc: Option<Vec<u8>> = conn
+        .query_row(
+            "SELECT header_encrypted FROM files WHERE id = ?1",
+            [file_id],
+            |r| r.get(0),
+        )
+        .map_err(|_| "파일 메타를 찾을 수 없습니다.".to_string())?;
+
+    let plaintext = decrypt_to_vec(&enc_path, header_enc.as_deref(), &dek)?;
+
+    let temp_dir = std::env::temp_dir().join(format!("sv_extract_{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
+
+    let cursor = std::io::Cursor::new(&plaintext);
+    let mut archive = zip::ZipArchive::new(cursor)
+        .map_err(|e| format!("ZIP 파일을 열 수 없습니다: {}", e))?;
+
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i).map_err(|e| e.to_string())?;
+        let name = file.name().to_string();
+
+        if file.is_dir() {
+            let dir_path = temp_dir.join(&name);
+            fs::create_dir_all(&dir_path).map_err(|e| e.to_string())?;
+        } else {
+            let out_path = temp_dir.join(&name);
+            if let Some(parent) = out_path.parent() {
+                fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            let mut out_file = fs::File::create(&out_path).map_err(|e| e.to_string())?;
+            std::io::copy(&mut file, &mut out_file).map_err(|e| e.to_string())?;
+        }
+    }
+
+    let archive_stem = std::path::Path::new(&display_name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("extracted")
+        .to_string();
+
+    let entries: Vec<_> = fs::read_dir(&temp_dir)
+        .map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok())
+        .collect();
+
+    let (file_count, folder_count) = if entries.len() == 1 && entries[0].path().is_dir() {
+        let single = entries[0].path();
+        vault_move_folder(base, &single, target_folder_id)?
+    } else {
+        let folder = crate::folders::create_folder(base, &archive_stem, target_folder_id)?;
+        let mut fc = 0usize;
+        let mut dc = 1usize;
+        for entry in entries {
+            let path = entry.path();
+            if path.is_dir() {
+                let (f, d) = vault_move_folder(base, &path, Some(&folder.id))?;
+                fc += f;
+                dc += d;
+            } else if path.is_file() {
+                match vault_move_file(base, &path, Some(&folder.id)) {
+                    Ok(_) => fc += 1,
+                    Err(e) => eprintln!("압축 해제 중 파일 실패: {:?} - {}", path, e),
+                }
+            }
+        }
+        (fc, dc)
+    };
+
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    Ok((file_count, folder_count))
 }
 
 // ===================== 스트리밍 프로토콜 헬퍼 =====================

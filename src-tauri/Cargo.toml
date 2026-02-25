@@ -51,3 +51,4 @@ lofty = "0.23"      # 음악 앨범커버 추출
 http-range = "0.1"          # Range 헤더 파싱 (스트리밍 프로토콜)
 http = "1"                  # HTTP types (스트리밍 응답 구성)
 percent-encoding = "2"      # URL 디코딩
+zip = "2"                   # ZIP 압축 해제

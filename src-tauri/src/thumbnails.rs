@@ -30,7 +30,7 @@ pub fn file_kind_from_ext(path: &Path) -> FileKind {
         "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp" | "ico" | "tiff" | "tif" => FileKind::Image,
         "mp4" | "avi" | "mkv" | "mov" | "webm" | "wmv" | "flv" | "m4v" => FileKind::Video,
         "mp3" | "wav" | "flac" | "ogg" | "m4a" | "aac" | "wma" => FileKind::Audio,
-        "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "txt" | "md" => FileKind::Document,
+        "pdf" | "doc" | "docx" | "xls" | "xlsx" | "csv" | "ppt" | "pptx" | "txt" | "md" | "json" | "xml" | "html" | "htm" | "hwp" | "hwpx" | "rtf" | "log" => FileKind::Document,
         _ => FileKind::Other,
     }
 }
