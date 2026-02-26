@@ -13,8 +13,12 @@ pub fn db_path(base: &Path) -> std::path::PathBuf {
     base.join(DB_FILE)
 }
 
+/// 안티 포렌식: WAL 비활성화 — .wal/.shm 파일에 흔적 남지 않도록
 fn conn(base: &Path) -> Result<Connection, String> {
-    Connection::open(db_path(base)).map_err(|e| e.to_string())
+    let c = Connection::open(db_path(base)).map_err(|e| e.to_string())?;
+    c.execute_batch("PRAGMA journal_mode=DELETE;")
+        .map_err(|e| e.to_string())?;
+    Ok(c)
 }
 
 /// DB 초기화: 테이블 생성 (vault_init에서 한 번만 호출)

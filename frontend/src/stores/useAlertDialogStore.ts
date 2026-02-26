@@ -6,7 +6,7 @@ import {
 import { create } from 'zustand';
 
 export interface AlertDialogConfig {
-  title?: AlertTitle;
+  title?: AlertTitle | string;
   type?: AlertType;
   description: string;
   confirmText?: string;

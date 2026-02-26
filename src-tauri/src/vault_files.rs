@@ -14,7 +14,8 @@ use crate::key_cache;
 use crate::thumbnails;
 use rusqlite::Connection;
 use std::fs;
-use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{BufReader, BufWriter, Cursor, Read, Seek, SeekFrom, Write};
+use std::collections::HashMap;
 use std::path::Path;
 use rand::RngCore;
 
@@ -31,7 +32,10 @@ fn data_dir(base: &Path) -> std::path::PathBuf {
 
 fn conn(base: &Path) -> Result<Connection, String> {
     crate::db::ensure_schema(base)?;
-    let c = Connection::open(crate::db::db_path(base)).map_err(|e| e.to_string())?;
+    let c =
+        Connection::open(crate::db::db_path(base)).map_err(|e| e.to_string())?;
+    c.execute_batch("PRAGMA journal_mode=DELETE;")
+        .map_err(|e| e.to_string())?;
     c.busy_timeout(std::time::Duration::from_secs(5)).map_err(|e| e.to_string())?;
     Ok(c)
 }
@@ -398,6 +402,134 @@ pub fn vault_move_file(
             Err(e)
         }
     }
+}
+
+/// 메모리 버퍼에서 직접 입고 — 임시 복호화 파일 디스크 저장 없음 (ZIP 해제 등용)
+pub fn vault_move_file_from_bytes(
+    base: &Path,
+    data: Vec<u8>,
+    original_name: &str,
+    folder_id: Option<&str>,
+) -> Result<String, String> {
+    let dek = key_cache::get_dek()
+        .ok_or("암호화 키가 없습니다. 금고를 잠근 후 비밀번호로 다시 열어주세요.")?;
+
+    let size_bytes = data.len() as i64;
+    let original_path_str = "";
+    let created_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_secs() as i64;
+
+    let data_path = data_dir(base);
+    fs::create_dir_all(&data_path).map_err(|e| e.to_string())?;
+    let id = uuid::Uuid::new_v4().to_string();
+    let hash_name = format!("{}.dat", id);
+    let dest_file = data_path.join(&hash_name);
+
+    let file_kind = thumbnails::file_kind_from_ext(Path::new(original_name));
+    let read_len = (THUMB_MAX_READ as usize).min(data.len());
+    let head_buf = &data[..read_len];
+
+    let thumbnail_plain = if data.len() <= THUMB_MAX_READ as usize {
+        make_thumbnail(head_buf, Path::new(original_name))?
+    } else {
+        make_thumbnail(head_buf, Path::new(original_name)).unwrap_or(None)
+    };
+
+    let header_len_actual = if data.is_empty() {
+        0
+    } else {
+        STEALTH_HEADER_LEN.min(data.len())
+    };
+    let header_encrypted_blob: Option<Vec<u8>> = if header_len_actual > 0 {
+        let header_plain = data[..header_len_actual].to_vec();
+        let enc = crypto::encrypt(&header_plain, &dek)?;
+        let mut blob = (header_len_actual as u16).to_be_bytes().to_vec();
+        blob.extend_from_slice(&enc);
+        Some(blob)
+    } else {
+        None
+    };
+
+    // 청크 암호화: [더미 헤더][본문] — Cursor로 메모리에서만 처리, 디스크 임시파일 없음
+    let mut reader: Box<dyn Read> = if header_len_actual > 0 {
+        let mut dummy = vec![0u8; header_len_actual];
+        rand::thread_rng().fill_bytes(&mut dummy);
+        let body_slice = &data[header_len_actual..];
+        Box::new(BufReader::new(
+            Cursor::new(dummy).chain(Cursor::new(body_slice)),
+        ))
+    } else {
+        Box::new(BufReader::new(Cursor::new(&data)))
+    };
+    let dst = fs::File::create(&dest_file).map_err(|e| e.to_string())?;
+    let mut writer = BufWriter::new(dst);
+    crypto::encrypt_file_chunked(&mut reader, &mut writer, &dek, crypto::CHUNK_SIZE)?;
+
+    let original_name_enc = encrypt_field(original_name, &dek)?;
+    let original_path_enc = encrypt_field(original_path_str, &dek)?;
+    let mime_type_enc = encrypt_field(&mime_from_name(original_name), &dek)?;
+    let created_at_enc = encrypt_field(&created_at.to_string(), &dek)?;
+    let thumbnail_encrypted = thumbnail_plain
+        .as_ref()
+        .and_then(|t| crypto::encrypt(t, &dek).ok());
+
+    let file_kind_str = match file_kind {
+        thumbnails::FileKind::Image => "image",
+        thumbnails::FileKind::Video => "video",
+        thumbnails::FileKind::Audio => "audio",
+        thumbnails::FileKind::Document => "document",
+        thumbnails::FileKind::Other => "other",
+    };
+
+    let conn = conn(base)?;
+    conn.execute_batch("BEGIN IMMEDIATE").map_err(|e| e.to_string())?;
+    let tx_result = (|| -> Result<(), String> {
+        conn.execute(
+            "INSERT INTO files (id, folder_id, original_name, original_path, hash_name, mime_type, size_bytes, thumbnail_blob, header_encrypted, created_at, created_at_enc) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10)",
+            rusqlite::params![
+                id,
+                folder_id,
+                original_name_enc,
+                original_path_enc,
+                hash_name,
+                mime_type_enc,
+                size_bytes,
+                thumbnail_encrypted,
+                header_encrypted_blob,
+                created_at_enc,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT INTO files_index (id, folder_id, hash_name, display_name, thumbnail_blob, created_at, created_at_enc, file_kind, size_bytes) VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8)",
+            rusqlite::params![
+                id,
+                folder_id,
+                hash_name,
+                original_name,
+                thumbnail_plain,
+                created_at_enc,
+                file_kind_str,
+                size_bytes,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    })();
+    match tx_result {
+        Ok(()) => {
+            conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            fs::remove_file(&dest_file).ok();
+            return Err(e);
+        }
+    }
+
+    Ok(id)
 }
 
 /// 암호화 파일 → writer 스트리밍 복호화 (청크/레거시 자동 감지)
@@ -883,15 +1015,17 @@ pub fn vault_confirm_drag_out(base: &Path, file_id: &str) -> Result<(), String> 
         .map_err(|e| e.to_string())?;
     let _ = conn.execute("DELETE FROM files_index WHERE id = ?1", [file_id]);
 
+    // Phase 7: 드래그 아웃 임시 파일 secure_delete로 zero-fill 후 삭제 (썸네일 캐시 방어)
     let temp_dir = std::env::temp_dir().join("stealthvault_drag");
     if let Ok(entries) = fs::read_dir(&temp_dir) {
         for e in entries.flatten() {
             let p = e.path();
-            if p.file_stem()
-                .and_then(|s| s.to_str())
-                .map_or(false, |s| s.starts_with(file_id))
+            if p.is_file()
+                && p.file_stem()
+                    .and_then(|s| s.to_str())
+                    .map_or(false, |s| s.starts_with(file_id))
             {
-                let _ = fs::remove_file(&p);
+                let _ = secure_delete(&p);
             }
         }
     }
@@ -1011,6 +1145,7 @@ pub fn vault_move_folder(
 // ===================== 압축 해제 (금고 내) =====================
 
 /// 금고에 저장된 ZIP 파일을 금고 내에서 해제
+/// RAM 전용: 임시 디스크 사용 없이 메모리에서 ZIP 파싱 후 vault_move_file_from_bytes로 입고
 pub fn vault_extract_archive(
     base: &Path,
     file_id: &str,
@@ -1029,7 +1164,6 @@ pub fn vault_extract_archive(
         .map_err(|_| "파일을 찾을 수 없습니다.".to_string())?;
 
     let enc_path = data_dir(base).join(&hash_name);
-
     let header_enc: Option<Vec<u8>> = conn
         .query_row(
             "SELECT header_encrypted FROM files WHERE id = ?1",
@@ -1039,68 +1173,79 @@ pub fn vault_extract_archive(
         .map_err(|_| "파일 메타를 찾을 수 없습니다.".to_string())?;
 
     let plaintext = decrypt_to_vec(&enc_path, header_enc.as_deref(), &dek)?;
-
-    let temp_dir = std::env::temp_dir().join(format!("sv_extract_{}", uuid::Uuid::new_v4()));
-    fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
-
-    let cursor = std::io::Cursor::new(&plaintext);
+    let cursor = Cursor::new(&plaintext);
     let mut archive = zip::ZipArchive::new(cursor)
         .map_err(|e| format!("ZIP 파일을 열 수 없습니다: {}", e))?;
 
-    for i in 0..archive.len() {
-        let mut file = archive.by_index(i).map_err(|e| e.to_string())?;
-        let name = file.name().to_string();
-
-        if file.is_dir() {
-            let dir_path = temp_dir.join(&name);
-            fs::create_dir_all(&dir_path).map_err(|e| e.to_string())?;
-        } else {
-            let out_path = temp_dir.join(&name);
-            if let Some(parent) = out_path.parent() {
-                fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-            }
-            let mut out_file = fs::File::create(&out_path).map_err(|e| e.to_string())?;
-            std::io::copy(&mut file, &mut out_file).map_err(|e| e.to_string())?;
-        }
-    }
-
-    let archive_stem = std::path::Path::new(&display_name)
+    let archive_stem = Path::new(&display_name)
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("extracted")
         .to_string();
 
-    let entries: Vec<_> = fs::read_dir(&temp_dir)
-        .map_err(|e| e.to_string())?
-        .filter_map(|e| e.ok())
-        .collect();
+    let root = crate::folders::create_folder(base, &archive_stem, target_folder_id)?;
+    let mut path_to_folder: HashMap<String, String> = HashMap::new();
+    path_to_folder.insert(String::new(), root.id.clone());
 
-    let (file_count, folder_count) = if entries.len() == 1 && entries[0].path().is_dir() {
-        let single = entries[0].path();
-        vault_move_folder(base, &single, target_folder_id)?
-    } else {
-        let folder = crate::folders::create_folder(base, &archive_stem, target_folder_id)?;
-        let mut fc = 0usize;
-        let mut dc = 1usize;
-        for entry in entries {
-            let path = entry.path();
-            if path.is_dir() {
-                let (f, d) = vault_move_folder(base, &path, Some(&folder.id))?;
-                fc += f;
-                dc += d;
-            } else if path.is_file() {
-                match vault_move_file(base, &path, Some(&folder.id)) {
-                    Ok(_) => fc += 1,
-                    Err(e) => eprintln!("압축 해제 중 파일 실패: {:?} - {}", path, e),
-                }
+    fn ensure_path(
+        base: &Path,
+        path: &str,
+        root_id: &str,
+        map: &mut HashMap<String, String>,
+    ) -> Result<String, String> {
+        if path.is_empty() {
+            return Ok(root_id.to_string());
+        }
+        if let Some(id) = map.get(path) {
+            return Ok(id.clone());
+        }
+        let parent = Path::new(path)
+            .parent()
+            .and_then(|p| p.to_str())
+            .unwrap_or("");
+        let parent_id = ensure_path(base, parent, root_id, map)?;
+        let name = Path::new(path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+        let folder = crate::folders::create_folder(base, name, Some(&parent_id))?;
+        map.insert(path.to_string(), folder.id.clone());
+        Ok(folder.id)
+    }
+
+    let mut file_count = 0usize;
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
+        let name = entry.name().to_string().replace('\\', "/");
+        let name = name.trim_end_matches('/').to_string();
+
+        if entry.is_dir() {
+            let _ = ensure_path(base, &name, &root.id, &mut path_to_folder)?;
+        } else {
+            let parent_path = Path::new(&name)
+                .parent()
+                .and_then(|p| p.to_str())
+                .unwrap_or("")
+                .to_string();
+            let file_name = Path::new(&name)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file")
+                .to_string();
+
+            let parent_id = ensure_path(base, &parent_path, &root.id, &mut path_to_folder)?;
+            let mut data = Vec::new();
+            std::io::copy(&mut entry, &mut data).map_err(|e| e.to_string())?;
+
+            match vault_move_file_from_bytes(base, data, &file_name, Some(&parent_id)) {
+                Ok(_) => file_count += 1,
+                Err(e) => eprintln!("압축 해제 중 파일 실패: {} - {}", name, e),
             }
         }
-        (fc, dc)
-    };
+    }
 
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    Ok((file_count, folder_count))
+    let folder_count = path_to_folder.len();
+    Ok((file_count, folder_count.max(1)))
 }
 
 // ===================== 스트리밍 프로토콜 헬퍼 =====================

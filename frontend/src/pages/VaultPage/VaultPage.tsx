@@ -28,10 +28,14 @@ function VaultPage() {
   const { selectedFolderId, setSelectedFolderId: rawSetFolder } =
     useVaultFolderStore();
 
-  // Navigation history
+  // Navigation history (ref 기반으로 클로저 스테일니스 방지)
   const historyBack = useRef<(string | null)[]>([]);
   const historyForward = useRef<(string | null)[]>([]);
   const isNavRef = useRef(false);
+  const currentFolderRef = useRef<string | null>(selectedFolderId);
+  const lastMouseNavRef = useRef(0);
+
+  currentFolderRef.current = selectedFolderId;
 
   const setSelectedFolderId = useCallback(
     (id: string | null) => {
@@ -40,42 +44,55 @@ function VaultPage() {
         rawSetFolder(id);
         return;
       }
-      historyBack.current.push(selectedFolderId);
-      historyForward.current = [];
+      const cur = currentFolderRef.current;
+      if (cur !== id) {
+        historyBack.current.push(cur);
+        historyForward.current = [];
+      }
       rawSetFolder(id);
     },
-    [selectedFolderId, rawSetFolder],
+    [rawSetFolder],
   );
 
   const goBack = useCallback(() => {
     if (historyBack.current.length === 0) return;
     const prev = historyBack.current.pop()!;
-    historyForward.current.push(selectedFolderId);
+    historyForward.current.push(currentFolderRef.current);
     isNavRef.current = true;
     rawSetFolder(prev);
-  }, [selectedFolderId, rawSetFolder]);
+  }, [rawSetFolder]);
 
   const goForward = useCallback(() => {
     if (historyForward.current.length === 0) return;
     const next = historyForward.current.pop()!;
-    historyBack.current.push(selectedFolderId);
+    historyBack.current.push(currentFolderRef.current);
     isNavRef.current = true;
     rawSetFolder(next);
-  }, [selectedFolderId, rawSetFolder]);
+  }, [rawSetFolder]);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (e.button === 3) {
-        e.preventDefault();
-        goBack();
-      } else if (e.button === 4) {
-        e.preventDefault();
-        goForward();
-      }
+      if (e.button !== 3 && e.button !== 4) return;
+      const now = Date.now();
+      if (now - lastMouseNavRef.current < 300) return; // 연타 방지
+      lastMouseNavRef.current = now;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.button === 3) goBack();
+      else goForward();
     };
-    window.addEventListener('mouseup', handler);
-    return () => window.removeEventListener('mouseup', handler);
+    window.addEventListener('mouseup', handler, true);
+    return () => window.removeEventListener('mouseup', handler, true);
   }, [goBack, goForward]);
+
+  useEffect(() => {
+    useVaultFolderStore
+      .getState()
+      .registerHistoryAwareNavigate(setSelectedFolderId);
+    return () => {
+      useVaultFolderStore.getState().registerHistoryAwareNavigate(null);
+    };
+  }, [setSelectedFolderId]);
   const [folders, setFolders] = useState<FolderItem[]>([]);
   const [files, setFiles] = useState<FileItem[]>([]);
   const [filesTotal, setFilesTotal] = useState<number | null>(null);

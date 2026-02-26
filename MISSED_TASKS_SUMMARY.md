@@ -1,7 +1,7 @@
 # StealthVault – 놓친 부분 / 미구현 / 보완 필요 항목 총정리
 
 > 대화·피드백·STEALTHVAULT_DEV_TASKS.md 종합 정리
-> 2025-02-25 기준 (코드 검증 반영)
+> 2026-02-26 기준 (코드 검증 반영)
 
 ---
 
@@ -78,15 +78,15 @@
 
 ## 4. UI·성능 (5TB 시나리오 대비)
 
-### 4.1 Virtual List / Lazy Loading (STEALTHVAULT_DEV_TASKS 3.7, 10.1)
+### 4.1 Virtual List / Lazy Loading (STEALTHVAULT_DEV_TASKS 3.7, 10.1) — ✅ 완료
 
-| 설계                                | 현재                              | 상태              |
-| ----------------------------------- | --------------------------------- | ----------------- |
-| 페이징 API (Offset/Limit)           | list_files_page, list_files_paged | **백엔드 완료**   |
-| 수만 개 파일 렉 없이 목록 표시      | `files.map()` 전체 렌더링         | **프론트 미연동** |
-| Virtual List (화면에 보이는 부분만) | 없음                              | 미구현            |
+| 설계                                | 현재                                   | 상태 |
+| ----------------------------------- | -------------------------------------- | ---- |
+| 페이징 API (Offset/Limit)           | list_files_page, list_files_paged      | 완료 |
+| 수만 개 파일 렉 없이 목록 표시      | list_files_paged + 무한 스크롤         | 완료 |
+| Virtual List (화면에 보이는 부분만) | @tanstack/react-virtual 행 단위 그리드 | 완료 |
 
-- **참고**: VaultPage는 아직 `list_files` 한 번에 조회. `list_files_paged` + @tanstack/virtual 연동 시 대용량 목록 대비 완료.
+- **구현**: VaultPage에서 `list_files_paged` 호출, VaultContentGrid에서 `useVirtualizer`로 행 단위 가상화.
 
 ### 4.2 전용 뷰어·플레이어 (STEALTHVAULT_DEV_TASKS 4.1) — ✅ 구현 완료
 
@@ -100,21 +100,26 @@
 
 ---
 
-## 5. 스텔스·UX (Gemini / STEALTHVAULT_DEV_TASKS 4.2)
+## 5. 스텔스·UX (Gemini / STEALTHVAULT_DEV_TASKS 4.2) — Phase 8 미구현
 
-| 항목          | 설계/피드백                               | 현재 | 상태   |
-| ------------- | ----------------------------------------- | ---- | ------ |
-| 트레이 최소화 | 앱 닫아도 트레이에 숨기고 단축키로만 표시 | -    | 미구현 |
-| 가상 드라이브 | 실행 중에만 마운트, 종료 시 사라짐        | 없음 | 미구현 |
+| 항목          | 설계/피드백                                      | 현재 | 상태   |
+| ------------- | ------------------------------------------------ | ---- | ------ |
+| 트레이 최소화 | 앱 닫아도 트레이에 숨기고 단축키로만 표시        | -    | 미구현 |
+| Panic 버튼    | Alt+~ 글로벌 단축키 → 앱 즉시 숨김 + 포커스 이동 | -    | 미구현 |
+| 페이크 모드   | 두 번째 비밀번호 → 빈 금고 or 메모장 화면        | -    | 미구현 |
+| 가상 드라이브 | 실행 중에만 마운트, 종료 시 사라짐               | 없음 | 미구현 |
 
 ---
 
-## 6. 추가 보안 (STEALTHVAULT_DEV_TASKS 4.4)
+## 6. 추가 보안 (STEALTHVAULT_DEV_TASKS 4.4) — ✅ 대부분 완료
 
-| 항목                         | 설계                  | 현재                            | 상태      |
-| ---------------------------- | --------------------- | ------------------------------- | --------- |
-| 앱 종료 시 키 제로아웃       | 메모리에서 키 Zeroing | key_cache만 있음, 제로아웃 불명 | 확인 필요 |
-| 최근 사용·미리보기 캐시 방지 | 윈도우 기록 방지      | 미구현                          | 미구현    |
+| 항목                         | 설계                  | 현재                                                               | 상태     |
+| ---------------------------- | --------------------- | ------------------------------------------------------------------ | -------- |
+| 앱 종료 시 키 제로아웃       | 메모리에서 키 Zeroing | `key_cache.rs`의 `zeroize_key` + `clear_dek` (잠금 시 byte 제거)  | ✅ 완료  |
+| SQLite WAL 비활성화          | .wal/.shm 흔적 방지   | `db.rs`, `folders.rs`, `vault_files.rs` 모두 PRAGMA journal_mode=DELETE | ✅ 완료 |
+| 썸네일 임시 파일 보호        | zero-fill + 삭제      | `thumbnails.rs` secure_remove, Windows FILE_ATTRIBUTE_TEMPORARY    | ✅ 완료  |
+| 릴리즈 빌드 난독화           | 바이너리 스트립       | Cargo.toml strip/lto/opt-z, vite sourcemap:false                   | ✅ 완료  |
+| 최근 사용·Jump Lists 방지    | 윈도우 기록 방지      | Tauri 미지원 (Win32 API 직접 호출 필요)                            | 미구현   |
 
 ---
 
@@ -133,13 +138,20 @@
 
 ---
 
-## 8. 우선 구현 제안 (보안·Stealth 우선)
+## 8. 구현 이력 & 우선순위 (현재 기준)
 
-1. **header_encrypted** 구현 (헤더 분리, 물리 파일 앞부분 더미 대체) ✅
+### 완료된 항목 (Phase 1~7)
+1. **header_encrypted** (헤더 분리, 물리 파일 더미 대체) ✅
 2. **메타데이터 암호화** (original_name, original_path, created_at_enc, mime_type) ✅
-3. **확장자 위장** (`.enc` → `.dat` 등) ✅
-4. **원본 제로 필 삭제** (포렌식 방지) ✅
+3. **확장자 위장** (`.dat` 위장) ✅
+4. **원본 제로 필 삭제** (secure_delete) ✅
 5. **같은 드라이브 fs::rename** (업로드 속도) ✅
-6. **Virtual List / 페이징** – 백엔드 API 완료 (list_files_paged). 프론트 연동(@tanstack/virtual 등) 미구현.
+6. **Virtual List / 페이징** (@tanstack/react-virtual 행 단위 가상화) ✅
+7. **Phase 7 안티 포렌식** (DEK 제로아웃, WAL 비활성화, 빌드 난독화, 썸네일 캐시 방어) ✅
 
-이후: 안티 포렌식(키 제로아웃, Jump List 방지), 페이크 모드, 트레이 숨김 등.
+### 미구현 — 다음 단계 (Phase 8 우선)
+- 트레이 숨기기 (`tauri-plugin-tray`)
+- Panic 버튼 (`tauri-plugin-global-shortcut` + `window.hide()`)
+- 페이크 모드 (두 번째 DEK 키 분기)
+- 라이선스 키 시스템 (Ed25519, Phase 9)
+- PC 간 암호화 아카이브 이관 (Phase 12)

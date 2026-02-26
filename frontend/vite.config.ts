@@ -5,6 +5,7 @@ import { defineConfig } from 'vite';
 export default defineConfig({
   plugins: [react()],
   build: {
+    sourcemap: false,
     rollupOptions: {
       output: {
         chunkFileNames: 'chunks/[name]-[hash].js',

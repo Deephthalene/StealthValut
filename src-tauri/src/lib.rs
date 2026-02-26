@@ -6,12 +6,14 @@
 mod crypto;
 mod db;
 mod folders;
+mod license;
 mod key_cache;
 mod quota;
 mod vault;
 mod vault_files;
 mod vault_location;
 mod thumbnails;
+mod purchase_email;
 
 use std::path::PathBuf;
 
@@ -35,10 +37,19 @@ fn vault_base_path() -> PathBuf {
     vault_location::resolve_vault_path()
 }
 
+#[derive(serde::Serialize)]
+pub struct LicenseStatus {
+    pub is_premium: bool,
+    pub email: Option<String>,
+}
+
 #[tauri::command]
 fn check_quota() -> Result<QuotaResult, String> {
-    let info = quota::get_quota_info(&vault_base_path())?;
+    let base = vault_base_path();
+    let info = quota::get_quota_info(&base)?;
     let limit_bytes = FREE_TIER_GB * 1024 * 1024 * 1024;
+    let is_premium = license::load_license(&base).ok().flatten().is_some();
+    let can_deposit = is_premium || info.vault_used_bytes < limit_bytes;
     Ok(QuotaResult {
         disk_free_bytes: info.disk_free_bytes,
         disk_free_gb: info.disk_free_gb,
@@ -46,8 +57,38 @@ fn check_quota() -> Result<QuotaResult, String> {
         vault_used_gb: info.vault_used_gb,
         limit_bytes,
         limit_gb: FREE_TIER_GB as f64,
-        can_deposit: info.vault_used_bytes < limit_bytes,
+        can_deposit,
     })
+}
+
+#[tauri::command]
+fn verify_and_activate_license(key: String, email: String) -> Result<(), String> {
+    let base = vault_base_path();
+    license::save_license(&key, &email, &base).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_license_status() -> Result<LicenseStatus, String> {
+    let base = vault_base_path();
+    match license::load_license(&base) {
+        Ok(Some(info)) => Ok(LicenseStatus {
+            is_premium: true,
+            email: Some(info.email),
+        }),
+        Ok(None) => Ok(LicenseStatus {
+            is_premium: false,
+            email: None,
+        }),
+        Err(e) => Ok(LicenseStatus {
+            is_premium: false,
+            email: None,
+        }),
+    }
+}
+
+#[tauri::command]
+async fn send_purchase_request(name: String, email: String) -> Result<(), String> {
+    purchase_email::send_purchase_request_email(&name, &email).await
 }
 
 /// 금고가 저장된 폴더 경로 반환
@@ -77,7 +118,17 @@ fn get_disk_free_for_path(path: String) -> u64 {
     quota::get_disk_free_for_path(PathBuf::from(&path).as_path())
 }
 
-/// 금고 초기화: 저장 경로 + 비밀번호로 설정, 복구 키 반환 (딱 한 번만! 경로 변경 불가)
+/// 금고 저장 위치 변경 (잘라내기 방식 — .vault_config, vault.db, data/, license.dat 이동)
+#[tauri::command]
+fn change_vault_location(new_path: String) -> Result<(), String> {
+    let path = PathBuf::from(new_path.trim());
+    if path.as_os_str().is_empty() {
+        return Err("경로가 비어있습니다.".into());
+    }
+    vault_location::change_vault_location(path.as_path())
+}
+
+/// 금고 초기화: 저장 경로 + 비밀번호로 설정, 복구 키 반환 (설정에서 경로 변경 가능)
 #[tauri::command]
 fn vault_init(vault_path: String, password: String) -> Result<String, String> {
     let raw = PathBuf::from(&vault_path);
@@ -519,7 +570,11 @@ pub fn run() {
             vault_extract_folder,
             vault_copy_out,
             vault_prepare_drag_out,
-            vault_confirm_drag_out
+            vault_confirm_drag_out,
+            change_vault_location,
+            verify_and_activate_license,
+            get_license_status,
+            send_purchase_request
         ])
         .run(tauri::generate_context!())
         .expect("StealthVault 실행 실패");

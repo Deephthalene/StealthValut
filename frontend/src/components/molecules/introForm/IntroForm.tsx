@@ -2,7 +2,10 @@ import SidebarFolderTree from '@/components/organisms/SidebarFolderTree/SidebarF
 import SidebarStorage from '@/components/organisms/SidebarStorage/SidebarStorage';
 import { useMenuStore } from '@/stores/useMenuStore';
 import { useThemeStore } from '@/stores/useThemeStore';
-import { useVaultFolderStore } from '@/stores/useVaultFolderStore';
+import {
+  useVaultFolderNavigate,
+  useVaultFolderStore,
+} from '@/stores/useVaultFolderStore';
 import { useVaultStore } from '@/stores/useVaultStore';
 import type { LucideIcon } from 'lucide-react';
 import { LayoutDashboard, Lock, Settings } from 'lucide-react';
@@ -20,7 +23,8 @@ export function IntroForm() {
   const { lock } = useVaultStore();
   const { applyTheme, colorTheme } = useThemeStore();
   const { menuItems } = useMenuStore();
-  const { selectedFolderId, setSelectedFolderId } = useVaultFolderStore();
+  const { selectedFolderId } = useVaultFolderStore();
+  const onSelectFolder = useVaultFolderNavigate();
   const [selectedMenu, setSelectedMenu] = useState<string>(
     menuItems.find((m) => m.path && location.pathname.startsWith(m.path))?.id ??
       menuItems[0]?.id ??
@@ -64,7 +68,7 @@ export function IntroForm() {
         <div className="flex-1 min-h-0 flex flex-col">
           <SidebarFolderTree
             selectedFolderId={selectedFolderId}
-            onSelectFolder={setSelectedFolderId}
+            onSelectFolder={onSelectFolder}
           />
         </div>
         <div className="flex flex-col gap-1 p-2 border-t border-border">

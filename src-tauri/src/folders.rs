@@ -15,7 +15,11 @@ pub struct FolderItem {
 
 fn conn(base: &Path) -> Result<Connection, String> {
     crate::db::ensure_schema(base)?;
-    Connection::open(crate::db::db_path(base)).map_err(|e| e.to_string())
+    let c =
+        Connection::open(crate::db::db_path(base)).map_err(|e| e.to_string())?;
+    c.execute_batch("PRAGMA journal_mode=DELETE;")
+        .map_err(|e| e.to_string())?;
+    Ok(c)
 }
 
 /// 자식 폴더 목록 조회 (parent_id가 None이면 루트)
