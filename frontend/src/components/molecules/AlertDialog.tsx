@@ -40,6 +40,7 @@ export function AlertDialog({
   onConfirm,
   onCancel,
   showCancel = false,
+  confirmVariant = 'default',
 }: AlertDialogProps) {
   if (!open) return null;
 
@@ -48,20 +49,20 @@ export function AlertDialog({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className="fixed inset-0 z-[70] flex items-center justify-center">
       <div
-        className="absolute inset-0 bg-black/40"
+        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
         onClick={() => handleClose(false)}
       />
-      <div className="relative bg-white dark:bg-slate-800 rounded-lg p-6 w-[90%] max-w-md shadow-lg">
-        {title && <h3 className="text-lg font-semibold mb-2">{title}</h3>}
+      <div className="relative bg-card border rounded-xl shadow-2xl p-6 w-[90%] max-w-sm mx-4">
+        {title && <h3 className="text-base font-semibold mb-2">{title}</h3>}
         {description && (
-          <p className="text-sm mb-4 text-muted-foreground">{description}</p>
+          <p className="text-sm text-muted-foreground mb-4">{description}</p>
         )}
         <div className="flex justify-end gap-2">
           {showCancel && (
             <button
-              className="px-4 py-2 rounded-md border"
+              className="px-4 py-2 rounded-lg text-sm border border-border hover:bg-accent"
               onClick={() => {
                 onCancel?.();
                 handleClose(false);
@@ -71,7 +72,11 @@ export function AlertDialog({
             </button>
           )}
           <button
-            className="px-4 py-2 rounded-md bg-primary text-primary-foreground"
+            className={
+              confirmVariant === 'destructive'
+                ? 'px-4 py-2 rounded-lg text-sm bg-rose-600 text-white hover:bg-rose-700'
+                : 'px-4 py-2 rounded-lg text-sm bg-primary text-primary-foreground'
+            }
             onClick={async () => {
               await onConfirm?.();
               handleClose(false);

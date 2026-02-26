@@ -18,9 +18,11 @@ export interface VaultFolderCardProps {
     siblings: FolderItem[],
   ) => void;
   onContextMenu: (e: React.MouseEvent, folder: FolderItem) => void;
-  onDragOver: (e: React.DragEvent, folderId: string) => void;
-  onDragLeave: () => void;
-  onDrop: (e: React.DragEvent, folderId: string) => void;
+  onPointerDownForDrag: (
+    folder: FolderItem,
+    clientX: number,
+    clientY: number,
+  ) => void;
   siblings: FolderItem[];
 }
 
@@ -37,13 +39,17 @@ export default function VaultFolderCard({
   onSelect,
   onClick,
   onContextMenu,
-  onDragOver,
-  onDragLeave,
-  onDrop,
+  onPointerDownForDrag,
   siblings,
 }: VaultFolderCardProps) {
   return (
     <div
+      data-vault-folder-id={folder.id}
+      onPointerDown={(e) => {
+        if (e.button !== 0) return;
+        if (renamingId === folder.id) return;
+        onPointerDownForDrag(folder, e.clientX, e.clientY);
+      }}
       className={`group relative flex flex-col rounded-xl border transition-all text-left w-full overflow-hidden cursor-pointer ${
         selected
           ? 'border-primary ring-2 ring-primary/30 shadow-md'
@@ -56,13 +62,6 @@ export default function VaultFolderCard({
         e.preventDefault();
         onContextMenu(e, folder);
       }}
-      onDragOver={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        onDragOver(e, folder.id);
-      }}
-      onDragLeave={onDragLeave}
-      onDrop={(e) => onDrop(e, folder.id)}
     >
       <div className="relative flex items-center justify-center aspect-square bg-accent/30 group-hover:bg-accent/50 transition-colors">
         <Folder size={48} className="text-amber-500" />
@@ -75,6 +74,7 @@ export default function VaultFolderCard({
         >
           <button
             type="button"
+            onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
               onSelect(folder.id, !selected);
@@ -101,6 +101,7 @@ export default function VaultFolderCard({
         <button
           type="button"
           className="absolute top-2 right-2 p-1 rounded-md bg-background/80 backdrop-blur-sm border border-border/50 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-background"
+          onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
             const rect = e.currentTarget.getBoundingClientRect();

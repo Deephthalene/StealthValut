@@ -1,4 +1,8 @@
-import { VAULT_FILES_CHANGED } from '@/components/organisms/SidebarStorage/SidebarStorage';
+import {
+  VAULT_FILES_CHANGED,
+  dispatchVaultFilesChanged,
+} from '@/components/organisms/SidebarStorage/SidebarStorage';
+import { alertDialog } from '@/stores/useAlertDialogStore';
 import { invoke } from '@tauri-apps/api/core';
 import {
   ChevronRight,
@@ -92,6 +96,7 @@ export default function SidebarFolderTree({
       setNewName('');
       setCreating(null);
       load();
+      dispatchVaultFilesChanged();
     } catch {
       // toast 등
     }
@@ -111,21 +116,34 @@ export default function SidebarFolderTree({
       setRenaming(null);
       setNewName('');
       load();
+      dispatchVaultFilesChanged();
     } catch {
       //
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('이 폴더와 하위 항목을 모두 삭제할까요?')) return;
-    try {
-      await invoke('delete_folder', { id });
-      if (selectedFolderId === id) onSelectFolder(null);
-      setMenuOpen(null);
-      load();
-    } catch {
-      //
-    }
+  const handleDelete = (id: string) => {
+    const folder = folders.find((f) => f.id === id);
+    const name = folder?.name ?? '이 폴더';
+    setMenuOpen(null);
+    alertDialog.custom({
+      title: '삭제 확인',
+      description: `${name}과(와) 하위 항목을 모두 삭제하시겠습니까?`,
+      confirmText: '삭제',
+      cancelText: '취소',
+      showCancel: true,
+      confirmVariant: 'destructive',
+      onConfirm: async () => {
+        try {
+          await invoke('delete_folder', { id });
+          if (selectedFolderId === id) onSelectFolder(null);
+          load();
+          dispatchVaultFilesChanged();
+        } catch {
+          //
+        }
+      },
+    });
   };
 
   useEffect(() => {
@@ -162,6 +180,7 @@ export default function SidebarFolderTree({
       return (
         <div key={item.id} className="select-none">
           <div
+            data-vault-folder-id={item.id}
             className={`group flex items-center gap-1 py-1 px-2 rounded-md text-sm cursor-pointer hover:bg-accent/50 ${
               isSelected ? 'bg-accent text-accent-foreground' : ''
             }`}
@@ -295,6 +314,17 @@ export default function SidebarFolderTree({
         </div>
       )}
 
+      <div
+        data-vault-folder-id=""
+        className={`flex items-center gap-1 py-1 px-2 rounded-md text-sm cursor-pointer hover:bg-accent/50 ${
+          selectedFolderId === null ? 'bg-accent text-accent-foreground' : ''
+        }`}
+        style={{ paddingLeft: '8px' }}
+        onClick={() => onSelectFolder(null)}
+      >
+        <Folder size={14} className="flex-shrink-0 text-muted-foreground" />
+        <span className="flex-1 truncate">내 드라이브</span>
+      </div>
       {loading ? (
         <div className="px-4 py-2 text-xs text-muted-foreground">
           로딩 중...

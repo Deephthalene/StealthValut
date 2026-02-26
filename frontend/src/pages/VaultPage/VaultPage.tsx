@@ -2,7 +2,10 @@ import ContextMenu from '@/components/molecules/ContextMenu/ContextMenu';
 import AudioPlayer from '@/components/organisms/AudioPlayer/AudioPlayer';
 import DocumentViewer from '@/components/organisms/DocumentViewer/DocumentViewer';
 import ImageViewer from '@/components/organisms/ImageViewer/ImageViewer';
-import { dispatchVaultFilesChanged } from '@/components/organisms/SidebarStorage/SidebarStorage';
+import {
+  dispatchVaultFilesChanged,
+  VAULT_FILES_CHANGED,
+} from '@/components/organisms/SidebarStorage/SidebarStorage';
 import VideoPlayer from '@/components/organisms/VideoPlayer/VideoPlayer';
 import { useVaultFolderStore } from '@/stores/useVaultFolderStore';
 import { invoke } from '@tauri-apps/api/core';
@@ -109,6 +112,10 @@ function VaultPage() {
     file: FileItem,
     allFiles: FileItem[],
   ) => {
+    if (internalDragJustFinishedRef.current) {
+      internalDragJustFinishedRef.current = false;
+      return;
+    }
     if (renamingFileId === file.id) return;
 
     if (e.ctrlKey || e.metaKey) {
@@ -155,6 +162,10 @@ function VaultPage() {
     folder: FolderItem,
     allFolders: FolderItem[],
   ) => {
+    if (internalDragJustFinishedRef.current) {
+      internalDragJustFinishedRef.current = false;
+      return;
+    }
     if (renamingFolderId === folder.id) return;
 
     if (e.ctrlKey || e.metaKey) {
@@ -289,6 +300,10 @@ function VaultPage() {
 
   // Move modal
   const [movingFile, setMovingFile] = useState<FileItem | null>(null);
+  const [bulkMoveItems, setBulkMoveItems] = useState<{
+    fileIds: string[];
+    folderIds: string[];
+  } | null>(null);
 
   // Delete confirmation
   const [deleteTarget, setDeleteTarget] = useState<{
@@ -339,6 +354,12 @@ function VaultPage() {
   }, [load]);
 
   useEffect(() => {
+    const onChanged = () => load();
+    window.addEventListener(VAULT_FILES_CHANGED, onChanged);
+    return () => window.removeEventListener(VAULT_FILES_CHANGED, onChanged);
+  }, [load]);
+
+  useEffect(() => {
     if (!isTauriEnv()) return;
     let unlisten: (() => void) | undefined;
     getCurrentWindow()
@@ -348,11 +369,6 @@ function VaultPage() {
         else setIsDragOver(false);
 
         if (t === 'drop' && event.payload.paths?.length) {
-          // 내부 드래그(파일→폴더 이동) 중이면 외부 업로드 무시
-          if (internalDragRef.current) {
-            internalDragRef.current = false;
-            return;
-          }
           if (uploadingRef.current) return;
           uploadingRef.current = true;
           const paths = [...new Set(event.payload.paths as string[])];
@@ -520,6 +536,7 @@ function VaultPage() {
       setNewName('');
       setCreating(false);
       load();
+      dispatchVaultFilesChanged();
     } catch {
       //
     }
@@ -550,38 +567,155 @@ function VaultPage() {
     }
   };
 
-  // Internal drag: HTML5 DnD for file→folder movement
+  // 내부 이동: HTML5 DnD 대신 포인터 이벤트 (Tauri 기본 드래그와 공존)
   const [dragOverFolderId, setDragOverFolderId] = useState<string | null>(null);
-  const internalDragRef = useRef(false);
+  const internalDragRef = useRef<{
+    fileIds: string[];
+    folderIds: string[];
+    startX: number;
+    startY: number;
+  } | null>(null);
+  const internalDragActiveRef = useRef(false);
+  const [internalDragCount, setInternalDragCount] = useState<number | null>(
+    null,
+  );
+  const internalDragJustFinishedRef = useRef(false);
 
-  const handleFileDragStart = (e: React.DragEvent, file: FileItem) => {
-    internalDragRef.current = true;
-    e.dataTransfer.setData('vault-file-id', file.id);
-    e.dataTransfer.effectAllowed = 'move';
-  };
+  const DRAG_THRESHOLD = 5;
 
-  const handleFolderDrop = async (
-    e: React.DragEvent,
-    targetFolderId: string,
-  ) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragOverFolderId(null);
+  const handleInternalMove = useCallback(
+    async (
+      fileIds: string[],
+      folderIds: string[],
+      targetFolderId: string | null,
+    ) => {
+      const target = targetFolderId || undefined;
+      const filteredFolderIds = folderIds.filter((id) => id !== targetFolderId);
+      if (fileIds.length === 0 && filteredFolderIds.length === 0) return;
+      try {
+        let ok = 0;
+        for (const fileId of fileIds) {
+          try {
+            await invoke('vault_change_folder', {
+              fileId,
+              folderId: target,
+            });
+            ok++;
+          } catch {
+            /* skip */
+          }
+        }
+        for (const folderId of filteredFolderIds) {
+          try {
+            await invoke('change_folder_parent', {
+              folderId,
+              newParentId: target,
+            });
+            ok++;
+          } catch {
+            /* skip */
+          }
+        }
+        if (ok > 0) {
+          toast.success(`${ok}개 항목을 이동했습니다`);
+          setSelectedFileIds(new Set());
+          setSelectedFolderIds(new Set());
+          await load();
+          dispatchVaultFilesChanged();
+        }
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [load],
+  );
 
-    const fileId = e.dataTransfer.getData('vault-file-id');
-    if (!fileId) return;
+  const onInternalPointerDown = useCallback(
+    (
+      fileIds: string[],
+      folderIds: string[],
+      clientX: number,
+      clientY: number,
+    ) => {
+      if (fileIds.length === 0 && folderIds.length === 0) return;
+      internalDragRef.current = {
+        fileIds,
+        folderIds,
+        startX: clientX,
+        startY: clientY,
+      };
+      internalDragActiveRef.current = false;
+    },
+    [],
+  );
 
-    try {
-      await invoke('vault_change_folder', {
-        fileId,
-        folderId: targetFolderId,
-      });
-      toast.success('파일이 이동되었습니다');
-      await load();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : String(err));
-    }
-  };
+  const onFilePointerDownForDrag = useCallback(
+    (file: FileItem, clientX: number, clientY: number) => {
+      const inSelection =
+        selectedFileIds.has(file.id) || selectedFolderIds.size > 0;
+      const fileIds = inSelection ? [...selectedFileIds] : [file.id];
+      const folderIds = inSelection ? [...selectedFolderIds] : [];
+      onInternalPointerDown(fileIds, folderIds, clientX, clientY);
+    },
+    [selectedFileIds, selectedFolderIds, onInternalPointerDown],
+  );
+
+  const onFolderPointerDownForDrag = useCallback(
+    (folder: FolderItem, clientX: number, clientY: number) => {
+      const inSelection =
+        selectedFolderIds.has(folder.id) || selectedFileIds.size > 0;
+      const folderIds = inSelection ? [...selectedFolderIds] : [folder.id];
+      const fileIds = inSelection ? [...selectedFileIds] : [];
+      onInternalPointerDown(fileIds, folderIds, clientX, clientY);
+    },
+    [selectedFileIds, selectedFolderIds, onInternalPointerDown],
+  );
+
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      const d = internalDragRef.current;
+      if (!d) return;
+      if (!internalDragActiveRef.current) {
+        const dx = e.clientX - d.startX;
+        const dy = e.clientY - d.startY;
+        if (dx * dx + dy * dy < DRAG_THRESHOLD * DRAG_THRESHOLD) return;
+        internalDragActiveRef.current = true;
+        setInternalDragCount(d.fileIds.length + d.folderIds.length);
+        document.body.style.cursor = 'grabbing';
+        document.body.style.userSelect = 'none';
+      }
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const card = el?.closest('[data-vault-folder-id]') as HTMLElement | null;
+      const folderId = card?.getAttribute('data-vault-folder-id') ?? null;
+      setDragOverFolderId(folderId);
+    };
+    const onUp = async (e: PointerEvent) => {
+      const d = internalDragRef.current;
+      const wasActive = internalDragActiveRef.current;
+      internalDragRef.current = null;
+      internalDragActiveRef.current = false;
+      setInternalDragCount(null);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      setDragOverFolderId(null);
+      if (!d || !wasActive) return;
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const card = el?.closest('[data-vault-folder-id]') as HTMLElement | null;
+      const folderId = card?.getAttribute('data-vault-folder-id') ?? null;
+      if (folderId !== null) {
+        internalDragJustFinishedRef.current = true;
+        await handleInternalMove(d.fileIds, d.folderIds, folderId);
+      }
+    };
+    document.addEventListener('pointermove', onMove, { passive: true });
+    document.addEventListener('pointerup', onUp);
+    document.addEventListener('pointercancel', onUp);
+    return () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.removeEventListener('pointercancel', onUp);
+    };
+  }, [handleInternalMove]);
 
   // --- File operations ---
   const handleDeleteFile = async (fileId: string) => {
@@ -618,6 +752,7 @@ function VaultPage() {
       });
       toast.success('이름이 변경되었습니다');
       await load();
+      dispatchVaultFilesChanged();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err));
     } finally {
@@ -637,6 +772,7 @@ function VaultPage() {
       });
       toast.success('폴더 이름이 변경되었습니다');
       await load();
+      dispatchVaultFilesChanged();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err));
     } finally {
@@ -654,6 +790,49 @@ function VaultPage() {
       toast.success('파일이 이동되었습니다');
       setMovingFile(null);
       await load();
+      dispatchVaultFilesChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleBulkMove = async (targetFolderId: string | null) => {
+    if (
+      !bulkMoveItems ||
+      (bulkMoveItems.fileIds.length === 0 &&
+        bulkMoveItems.folderIds.length === 0)
+    )
+      return;
+    try {
+      let ok = 0;
+      for (const fileId of bulkMoveItems.fileIds) {
+        try {
+          await invoke('vault_change_folder', {
+            fileId,
+            folderId: targetFolderId || undefined,
+          });
+          ok++;
+        } catch {
+          // continue
+        }
+      }
+      for (const folderId of bulkMoveItems.folderIds) {
+        try {
+          await invoke('change_folder_parent', {
+            folderId,
+            newParentId: targetFolderId || undefined,
+          });
+          ok++;
+        } catch {
+          // continue
+        }
+      }
+      setBulkMoveItems(null);
+      setSelectedFileIds(new Set());
+      setSelectedFolderIds(new Set());
+      toast.success(`${ok}개 항목을 이동했습니다`);
+      await load();
+      dispatchVaultFilesChanged();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err));
     }
@@ -817,6 +996,15 @@ function VaultPage() {
 
   return (
     <div className="flex flex-col h-full min-h-0 relative">
+      {internalDragCount !== null && (
+        <div
+          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[80] px-4 py-2 rounded-lg bg-primary/90 text-primary-foreground text-sm font-medium shadow-lg flex items-center gap-2 pointer-events-none"
+          aria-hidden
+        >
+          <span className="animate-pulse">{internalDragCount}개 항목</span>
+          <span className="opacity-90">이동 중...</span>
+        </div>
+      )}
       <VaultModals
         showProgress={showProgress}
         uploading={uploading}
@@ -826,9 +1014,12 @@ function VaultPage() {
         onDeleteConfirm={handleDeleteConfirm}
         movingFile={movingFile}
         setMovingFile={setMovingFile}
+        bulkMoveItems={bulkMoveItems}
+        setBulkMoveItems={setBulkMoveItems}
         allFolders={allFolders}
         selectedFolderId={selectedFolderId}
         onMoveFile={handleMoveFile}
+        onBulkMove={handleBulkMove}
       />
 
       <VaultToolbar
@@ -860,6 +1051,12 @@ function VaultPage() {
             type: 'file',
             id: '__bulk__',
             name: `${totalSelected}개 항목`,
+          })
+        }
+        onBulkMove={() =>
+          setBulkMoveItems({
+            fileIds: [...selectedFileIds],
+            folderIds: [...selectedFolderIds],
           })
         }
         onClearSelection={() => {
@@ -939,18 +1136,8 @@ function VaultPage() {
             onFileContextMenuMore={(file, rect) =>
               setCtxMenu({ x: rect.right, y: rect.bottom, file })
             }
-            onFolderDragOver={(e, folderId) => {
-              e.preventDefault();
-              e.stopPropagation();
-              setDragOverFolderId(folderId);
-            }}
-            onFolderDragLeave={() => setDragOverFolderId(null)}
-            onFolderDrop={handleFolderDrop}
-            onFileDragStart={handleFileDragStart}
-            onFileDragEnd={() => {
-              internalDragRef.current = false;
-              setDragOverFolderId(null);
-            }}
+            onFilePointerDownForDrag={onFilePointerDownForDrag}
+            onFolderPointerDownForDrag={onFolderPointerDownForDrag}
             lastClickedFileRef={lastClickedFileRef}
             scrollParentRef={scrollParentRef}
           />

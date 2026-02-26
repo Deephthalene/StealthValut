@@ -165,6 +165,16 @@ fn delete_folder(id: String) -> Result<(), String> {
     folders::delete_folder(&vault_base_path(), &id)
 }
 
+/// 폴더 부모 변경 (다른 폴더로 이동)
+#[tauri::command]
+fn change_folder_parent(folder_id: String, new_parent_id: Option<String>) -> Result<(), String> {
+    folders::change_folder_parent(
+        &vault_base_path(),
+        &folder_id,
+        new_parent_id.as_deref(),
+    )
+}
+
 /// file:// URL 또는 일반 경로를 PathBuf로 변환 (드롭 시 Windows에서 file:/// 경로 올 수 있음)
 fn parse_file_path(s: &str) -> PathBuf {
     let s = s.trim();
@@ -494,6 +504,7 @@ pub fn run() {
             create_folder,
             rename_folder,
             delete_folder,
+            change_folder_parent,
             vault_move_file,
             vault_move_folder,
             vault_extract_archive,

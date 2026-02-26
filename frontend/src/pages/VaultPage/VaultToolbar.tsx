@@ -1,5 +1,6 @@
 import {
   ArrowDownAZ,
+  ArrowDownToLine,
   ArrowUpFromLine,
   Folder,
   FolderInput,
@@ -47,6 +48,7 @@ interface VaultToolbarProps {
   selectedFileCount: number;
   onBulkExport: () => void;
   onBulkDeleteClick: () => void;
+  onBulkMove: () => void;
   onClearSelection: () => void;
 }
 
@@ -76,6 +78,7 @@ export default function VaultToolbar(props: VaultToolbarProps) {
     selectedFileCount,
     onBulkExport,
     onBulkDeleteClick,
+    onBulkMove,
     onClearSelection,
   } = props;
   const sortRef = useRef<HTMLDivElement>(null);
@@ -103,6 +106,14 @@ export default function VaultToolbar(props: VaultToolbarProps) {
             )}
           </span>
           <div className="flex-1" />
+          <button
+            type="button"
+            onClick={onBulkMove}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border border-border hover:bg-accent"
+          >
+            <ArrowDownToLine size={14} />
+            이동
+          </button>
           <button
             type="button"
             onClick={onBulkExport}
@@ -208,7 +219,7 @@ export default function VaultToolbar(props: VaultToolbarProps) {
           <div className="relative" ref={sortRef}>
             <button
               type="button"
-              onClick={() => setShowSortMenu((v) => !v)}
+              onClick={() => setShowSortMenu(!showSortMenu)}
               className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-border text-sm hover:bg-accent"
             >
               <ArrowDownAZ size={14} />

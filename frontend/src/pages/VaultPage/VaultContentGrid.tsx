@@ -33,11 +33,16 @@ export interface VaultContentGridProps {
     file: FileItem,
     rect: { right: number; bottom: number },
   ) => void;
-  onFolderDragOver: (e: React.DragEvent, folderId: string) => void;
-  onFolderDragLeave: () => void;
-  onFolderDrop: (e: React.DragEvent, folderId: string) => void;
-  onFileDragStart: (e: React.DragEvent, file: FileItem) => void;
-  onFileDragEnd: () => void;
+  onFilePointerDownForDrag: (
+    file: FileItem,
+    clientX: number,
+    clientY: number,
+  ) => void;
+  onFolderPointerDownForDrag: (
+    folder: FolderItem,
+    clientX: number,
+    clientY: number,
+  ) => void;
   lastClickedFileRef: React.MutableRefObject<string | null>;
   scrollParentRef: React.RefObject<HTMLDivElement>;
 }
@@ -64,11 +69,8 @@ export default function VaultContentGrid({
   onFolderContextMenu,
   onFileContextMenu,
   onFileContextMenuMore,
-  onFolderDragOver,
-  onFolderDragLeave,
-  onFolderDrop,
-  onFileDragStart,
-  onFileDragEnd,
+  onFilePointerDownForDrag,
+  onFolderPointerDownForDrag,
   lastClickedFileRef,
   scrollParentRef,
 }: VaultContentGridProps) {
@@ -147,9 +149,7 @@ export default function VaultContentGrid({
                     onSelect={onFolderSelect}
                     onClick={onFolderClick}
                     onContextMenu={onFolderContextMenu}
-                    onDragOver={onFolderDragOver}
-                    onDragLeave={onFolderDragLeave}
-                    onDrop={onFolderDrop}
+                    onPointerDownForDrag={onFolderPointerDownForDrag}
                     siblings={sortedFolders}
                   />
                 ) : (
@@ -168,8 +168,7 @@ export default function VaultContentGrid({
                     onClick={onFileClick}
                     onContextMenu={onFileContextMenu}
                     onContextMenuMore={onFileContextMenuMore}
-                    onDragStart={onFileDragStart}
-                    onDragEnd={onFileDragEnd}
+                    onPointerDownForDrag={onFilePointerDownForDrag}
                     lastClickedRef={lastClickedFileRef}
                   />
                 ),

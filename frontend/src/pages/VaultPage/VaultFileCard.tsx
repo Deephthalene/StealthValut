@@ -25,8 +25,11 @@ export interface VaultFileCardProps {
     file: FileItem,
     rect: { right: number; bottom: number },
   ) => void;
-  onDragStart: (e: React.DragEvent, file: FileItem) => void;
-  onDragEnd: () => void;
+  onPointerDownForDrag: (
+    file: FileItem,
+    clientX: number,
+    clientY: number,
+  ) => void;
   lastClickedRef: React.MutableRefObject<string | null>;
 }
 
@@ -44,8 +47,7 @@ export default function VaultFileCard({
   onClick,
   onContextMenu,
   onContextMenuMore,
-  onDragStart,
-  onDragEnd,
+  onPointerDownForDrag,
   lastClickedRef,
 }: VaultFileCardProps) {
   const Icon =
@@ -75,9 +77,11 @@ export default function VaultFileCard({
 
   return (
     <div
-      draggable
-      onDragStart={(e) => onDragStart(e, file)}
-      onDragEnd={onDragEnd}
+      onPointerDown={(e) => {
+        if (e.button !== 0) return;
+        if (renamingId === file.id) return;
+        onPointerDownForDrag(file, e.clientX, e.clientY);
+      }}
       onClick={(e) => onClick(e, file, allFiles)}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -94,7 +98,8 @@ export default function VaultFileCard({
           <img
             src={`data:image/jpeg;base64,${file.thumbnail_base64}`}
             alt=""
-            className="w-full h-full object-cover"
+            draggable={false}
+            className="w-full h-full object-cover pointer-events-none"
           />
         ) : (
           <Icon size={48} className={iconColor} />
@@ -108,6 +113,7 @@ export default function VaultFileCard({
         >
           <button
             type="button"
+            onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
               onSelect(file.id, !selected);
@@ -132,7 +138,10 @@ export default function VaultFileCard({
             )}
           </button>
         </div>
-        <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div
+          className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity"
+          onPointerDown={(e) => e.stopPropagation()}
+        >
           <button
             type="button"
             onClick={(e) => {

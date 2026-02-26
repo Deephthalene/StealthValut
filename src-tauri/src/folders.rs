@@ -106,6 +106,51 @@ pub fn rename_folder(base: &Path, id: &str, new_name: &str) -> Result<(), String
     Ok(())
 }
 
+/// 폴더 부모 변경 (다른 폴더로 이동)
+pub fn change_folder_parent(
+    base: &Path,
+    folder_id: &str,
+    new_parent_id: Option<&str>,
+) -> Result<(), String> {
+    if let Some(pid) = new_parent_id {
+        if pid == folder_id {
+            return Err("폴더를 자신의 하위로 이동할 수 없습니다.".into());
+        }
+        if is_descendant_of(base, pid, folder_id)? {
+            return Err("폴더를 자신의 하위 폴더로 이동할 수 없습니다.".into());
+        }
+    }
+
+    let conn = conn(base)?;
+    let n = conn
+        .execute(
+            "UPDATE folders SET parent_id = ?1 WHERE id = ?2",
+            rusqlite::params![new_parent_id, folder_id],
+        )
+        .map_err(|e| e.to_string())?;
+    if n == 0 {
+        return Err("폴더를 찾을 수 없습니다.".into());
+    }
+    Ok(())
+}
+
+/// ancestor_id가 folder_id의 조상인지 (folder_id가 ancestor_id의 후손인지)
+fn is_descendant_of(base: &Path, folder_id: &str, ancestor_id: &str) -> Result<bool, String> {
+    let conn = conn(base)?;
+    let mut current_id: Option<String> = Some(folder_id.to_string());
+    while let Some(id) = current_id {
+        if id == ancestor_id {
+            return Ok(true);
+        }
+        current_id = conn
+            .prepare("SELECT parent_id FROM folders WHERE id = ?1")
+            .map_err(|e| e.to_string())?
+            .query_row([&id], |r| r.get::<_, Option<String>>(0))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(false)
+}
+
 /// 폴더 삭제 (하위 폴더·파일 포함)
 pub fn delete_folder(base: &Path, id: &str) -> Result<(), String> {
     delete_folder_recursive(base, id)
