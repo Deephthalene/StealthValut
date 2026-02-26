@@ -27,6 +27,7 @@ pub struct QuotaResult {
     pub limit_bytes: u64,
     pub limit_gb: f64,
     pub can_deposit: bool,
+    pub is_premium: bool,
 }
 
 /// 무료 사용자 용량 제한 (GB)
@@ -47,17 +48,27 @@ pub struct LicenseStatus {
 fn check_quota() -> Result<QuotaResult, String> {
     let base = vault_base_path();
     let info = quota::get_quota_info(&base)?;
-    let limit_bytes = FREE_TIER_GB * 1024 * 1024 * 1024;
     let is_premium = license::load_license(&base).ok().flatten().is_some();
-    let can_deposit = is_premium || info.vault_used_bytes < limit_bytes;
+    let (limit_bytes, limit_gb) = if is_premium {
+        (info.disk_total_bytes, info.disk_total_gb)
+    } else {
+        let lb = FREE_TIER_GB * 1024 * 1024 * 1024;
+        (lb, FREE_TIER_GB as f64)
+    };
+    let can_deposit = if is_premium {
+        info.disk_free_bytes > 10 * 1024 * 1024 // 디스크 여유 10MB 이상
+    } else {
+        info.vault_used_bytes < limit_bytes
+    };
     Ok(QuotaResult {
         disk_free_bytes: info.disk_free_bytes,
         disk_free_gb: info.disk_free_gb,
         vault_used_bytes: info.vault_used_bytes,
         vault_used_gb: info.vault_used_gb,
         limit_bytes,
-        limit_gb: FREE_TIER_GB as f64,
+        limit_gb,
         can_deposit,
+        is_premium,
     })
 }
 
@@ -244,26 +255,38 @@ fn parse_file_path(s: &str) -> PathBuf {
     }
 }
 
+/// 무료 플랜 용량 초과 여부 확인
+fn check_free_tier_quota(base: &std::path::Path) -> Result<(), String> {
+    let is_premium = license::load_license(base).ok().flatten().is_some();
+    if !is_premium {
+        let info = quota::get_quota_info(base)?;
+        let limit_bytes = FREE_TIER_GB * 1024 * 1024 * 1024;
+        if info.vault_used_bytes >= limit_bytes {
+            return Err(format!(
+                "무료 플랜의 저장 한도({} GB)에 도달했습니다. 프리미엄으로 업그레이드하세요.",
+                FREE_TIER_GB
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// 파일 이동+암호화 (원본 삭제)
 #[tauri::command]
 fn vault_move_file(source_path: String, folder_id: Option<String>) -> Result<String, String> {
+    let base = vault_base_path();
+    check_free_tier_quota(&base)?;
     let path = parse_file_path(&source_path);
-    vault_files::vault_move_file(
-        &vault_base_path(),
-        path.as_path(),
-        folder_id.as_deref(),
-    )
+    vault_files::vault_move_file(&base, path.as_path(), folder_id.as_deref())
 }
 
 /// 폴더 업로드 (재귀)
 #[tauri::command]
 fn vault_move_folder(source_path: String, folder_id: Option<String>) -> Result<(usize, usize), String> {
+    let base = vault_base_path();
+    check_free_tier_quota(&base)?;
     let path = parse_file_path(&source_path);
-    vault_files::vault_move_folder(
-        &vault_base_path(),
-        path.as_path(),
-        folder_id.as_deref(),
-    )
+    vault_files::vault_move_folder(&base, path.as_path(), folder_id.as_deref())
 }
 
 /// 파일 삭제 (금고에서 영구 제거)

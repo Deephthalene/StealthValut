@@ -11,8 +11,7 @@ use std::fs;
 use std::path::Path;
 
 /// 앱에 하드코딩되는 Ed25519 공개키 (개인키는 tools/keygen에서만 보관)
-/// TODO: keygen으로 키페어 생성 후 실제 공개키 32바이트로 교체
-const PUBLIC_KEY_BYTES: [u8; 32] = [0u8; 32];
+const PUBLIC_KEY_BYTES: [u8; 32] = [94, 121, 77, 54, 52, 25, 145, 17, 106, 154, 205, 98, 197, 201, 213, 55, 225, 72, 201, 196, 168, 75, 142, 177, 180, 153, 237, 100, 66, 133, 25, 237];
 
 const LICENSE_FILE: &str = "license.dat";
 const PAYLOAD_SIZE: usize = 44; // 1 + 1 + 32 + 10
