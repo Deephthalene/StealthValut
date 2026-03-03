@@ -11,7 +11,6 @@ import { useVaultFolderStore } from '@/stores/useVaultFolderStore';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
-import { startDrag } from '@crabnebula/tauri-plugin-drag';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import VaultContentGrid from './VaultContentGrid';
@@ -110,6 +109,8 @@ function VaultPage() {
   const [uploadError, setUploadError] = useState('');
   const [isDragOver, setIsDragOver] = useState(false);
   const uploadingRef = useRef(false);
+  const lastDropPathsRef = useRef<string>('');
+  const lastDropTimeRef = useRef(0);
   const [viewerFile, setViewerFile] = useState<FileItem | null>(null);
   const [audioFile, setAudioFile] = useState<FileItem | null>(null);
   const [videoFile, setVideoFile] = useState<FileItem | null>(null);
@@ -388,24 +389,54 @@ function VaultPage() {
 
         if (t === 'drop' && event.payload.paths?.length) {
           if (uploadingRef.current) return;
-          uploadingRef.current = true;
           const paths = [...new Set(event.payload.paths as string[])];
+          const pathsKey = paths.slice().sort().join('|');
+          const now = Date.now();
+          if (
+            pathsKey === lastDropPathsRef.current &&
+            now - lastDropTimeRef.current < 800
+          ) {
+            return;
+          }
+          lastDropPathsRef.current = pathsKey;
+          lastDropTimeRef.current = now;
+          uploadingRef.current = true;
+          const payload = event.payload as {
+            paths?: string[];
+            position?: { x: number; y: number };
+          };
+          let targetFolderId: string | null =
+            useVaultFolderStore.getState().selectedFolderId;
+          if (payload.position) {
+            const el = document.elementFromPoint(
+              payload.position.x,
+              payload.position.y,
+            );
+            const card = el?.closest(
+              '[data-vault-folder-id]',
+            ) as HTMLElement | null;
+            if (card) {
+              targetFolderId =
+                card.getAttribute('data-vault-folder-id') ?? targetFolderId;
+            }
+          }
           setUploadError('');
           setUploading(true);
           setUploadProgress({ current: 0, total: paths.length });
           let done = 0;
+          const folderIdForUpload = targetFolderId || undefined;
           const uploadOne = async (p: string) => {
             try {
               await invoke('vault_move_file', {
                 sourcePath: p,
-                folderId: selectedFolderId || undefined,
+                folderId: folderIdForUpload,
               });
             } catch (err: unknown) {
               const msg = String(err);
               if (msg.includes('폴더는 업로드할 수 없습니다')) {
                 await invoke('vault_move_folder', {
                   sourcePath: p,
-                  folderId: selectedFolderId || undefined,
+                  folderId: folderIdForUpload,
                 });
               } else if (msg.includes('찾을 수 없습니다')) {
                 return;
@@ -427,18 +458,18 @@ function VaultPage() {
                 )
                 .map((r) => r.reason);
               const ok = results.filter((r) => r.status === 'fulfilled').length;
-              if (errors.length === 0) {
-                setUploadError('');
-                if (ok) toast.success(`${ok}개 항목 업로드 완료`);
-              } else {
-                setUploadError(
-                  errors[0] instanceof Error
+              const showSuccess = ok > 0;
+              const showError = errors.length > 0;
+              setUploadError(
+                showError
+                  ? errors[0] instanceof Error
                     ? errors[0].message
-                    : String(errors[0]),
-                );
+                    : String(errors[0])
+                  : '',
+              );
+              if (showError)
                 toast.error(errors[0]?.toString?.() ?? '업로드 실패');
-                if (ok) toast.success(`${ok}개 항목 업로드 완료`);
-              }
+              if (showSuccess) toast.success(`${ok}개 항목 업로드 완료`);
             })
             .finally(() => {
               load().then(dispatchVaultFilesChanged);
@@ -454,7 +485,7 @@ function VaultPage() {
     return () => {
       unlisten?.();
     };
-  }, [load, selectedFolderId]);
+  }, [load]);
 
   const breadcrumb: FolderItem[] = (() => {
     if (!selectedFolderId) return [];
@@ -481,13 +512,15 @@ function VaultPage() {
       });
       if (!selected) return;
       const paths = Array.isArray(selected) ? selected : [selected];
+      const folderId =
+        useVaultFolderStore.getState().selectedFolderId ?? undefined;
       setUploading(true);
       setUploadProgress({ current: 0, total: paths.length });
       let done = 0;
       for (const p of paths) {
         await invoke('vault_move_file', {
           sourcePath: p,
-          folderId: selectedFolderId || undefined,
+          folderId,
         });
         done += 1;
         setUploadProgress({ current: done, total: paths.length });
@@ -515,13 +548,15 @@ function VaultPage() {
       });
       if (!selected) return;
       const folderPath = Array.isArray(selected) ? selected[0] : selected;
+      const folderId =
+        useVaultFolderStore.getState().selectedFolderId ?? undefined;
       setUploading(true);
       setUploadProgress(null);
       const [fileCount, folderCount] = await invoke<[number, number]>(
         'vault_move_folder',
         {
           sourcePath: folderPath,
-          folderId: selectedFolderId || undefined,
+          folderId,
         },
       );
       toast.success(
@@ -648,51 +683,6 @@ function VaultPage() {
     [load],
   );
 
-  // 외부 드래그아웃: 파일을 복호화 → OS 네이티브 드래그 → 금고에서 삭제
-  const externalDragInProgressRef = useRef(false);
-  const handleExternalDragOut = useCallback(
-    async (fileIds: string[]) => {
-      if (externalDragInProgressRef.current || fileIds.length === 0) return;
-      externalDragInProgressRef.current = true;
-      try {
-        // 임시 복호화 + 아이콘 준비
-        const tempPaths: string[] = [];
-        let iconPath = '';
-        for (const fileId of fileIds) {
-          const [filePath, icon] = await invoke<[string, string]>(
-            'vault_prepare_drag_out',
-            { fileId },
-          );
-          tempPaths.push(filePath);
-          if (!iconPath) iconPath = icon;
-        }
-        // OS 네이티브 드래그 시작 (마우스 버튼 누른 상태에서 OS가 제어)
-        let dropped = false;
-        await startDrag(
-          { item: tempPaths, icon: iconPath },
-          (event) => {
-            if (event.result === 'Dropped') dropped = true;
-          },
-        );
-        if (dropped) {
-          // 드래그 성공 → 금고에서 삭제
-          for (const fileId of fileIds) {
-            await invoke('vault_confirm_drag_out', { fileId });
-          }
-          toast.success(`${fileIds.length}개 파일을 내보냈습니다`);
-          await load();
-          dispatchVaultFilesChanged();
-        }
-        // 드래그 취소 → 금고 파일 유지 (temp 파일은 다음 기회에 정리)
-      } catch {
-        // 오류 발생 — 금고 파일 유지
-      } finally {
-        externalDragInProgressRef.current = false;
-      }
-    },
-    [load],
-  );
-
   const onInternalPointerDown = useCallback(
     (
       fileIds: string[],
@@ -735,8 +725,6 @@ function VaultPage() {
   );
 
   useEffect(() => {
-    const EDGE_MARGIN = 20; // 창 가장자리 감지 여백(px)
-
     const onMove = (e: PointerEvent) => {
       const d = internalDragRef.current;
       if (!d) return;
@@ -748,26 +736,6 @@ function VaultPage() {
         setInternalDragCount(d.fileIds.length + d.folderIds.length);
         document.body.style.cursor = 'grabbing';
         document.body.style.userSelect = 'none';
-      }
-
-      // 창 경계 근처 → 외부 드래그아웃 전환 (파일만, 폴더는 내부 이동만)
-      const nearEdge =
-        e.clientX <= EDGE_MARGIN ||
-        e.clientY <= EDGE_MARGIN ||
-        e.clientX >= window.innerWidth - EDGE_MARGIN ||
-        e.clientY >= window.innerHeight - EDGE_MARGIN;
-      if (nearEdge && d.fileIds.length > 0) {
-        const dragFileIds = [...d.fileIds];
-        // 내부 드래그 정리
-        internalDragRef.current = null;
-        internalDragActiveRef.current = false;
-        setInternalDragCount(null);
-        document.body.style.cursor = '';
-        document.body.style.userSelect = '';
-        setDragOverFolderId(null);
-        internalDragJustFinishedRef.current = true;
-        handleExternalDragOut(dragFileIds);
-        return;
       }
 
       const el = document.elementFromPoint(e.clientX, e.clientY);
@@ -786,18 +754,6 @@ function VaultPage() {
       setDragOverFolderId(null);
       if (!d || !wasActive) return;
 
-      // 창 밖에서 pointerup → 외부 드래그아웃
-      const outsideWindow =
-        e.clientX <= 0 ||
-        e.clientY <= 0 ||
-        e.clientX >= window.innerWidth ||
-        e.clientY >= window.innerHeight;
-      if (outsideWindow && d.fileIds.length > 0) {
-        internalDragJustFinishedRef.current = true;
-        handleExternalDragOut(d.fileIds);
-        return;
-      }
-
       const el = document.elementFromPoint(e.clientX, e.clientY);
       const card = el?.closest('[data-vault-folder-id]') as HTMLElement | null;
       const folderId = card?.getAttribute('data-vault-folder-id') ?? null;
@@ -814,7 +770,7 @@ function VaultPage() {
       document.removeEventListener('pointerup', onUp);
       document.removeEventListener('pointercancel', onUp);
     };
-  }, [handleInternalMove, handleExternalDragOut]);
+  }, [handleInternalMove]);
 
   // --- File operations ---
   const handleDeleteFile = async (fileId: string) => {

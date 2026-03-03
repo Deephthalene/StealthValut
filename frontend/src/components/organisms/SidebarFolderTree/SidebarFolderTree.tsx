@@ -187,19 +187,23 @@ export default function SidebarFolderTree({
             style={{ paddingLeft: `${8 + depth * 12}px` }}
             onClick={() => !isRenamingItem && onSelectFolder(item.id)}
           >
-            <button
-              type="button"
-              className="p-0.5 -m-0.5 hover:bg-accent rounded"
-              onClick={(e) => {
-                e.stopPropagation();
-                if (hasChildren) toggleExpand(item.id);
-              }}
-            >
-              <ChevronRight
-                size={14}
-                className={`transition-transform ${isExpanded ? 'rotate-90' : ''}`}
-              />
-            </button>
+            {hasChildren ? (
+              <button
+                type="button"
+                className="p-0.5 -m-0.5 hover:bg-accent rounded"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleExpand(item.id);
+                }}
+              >
+                <ChevronRight
+                  size={14}
+                  className={`transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                />
+              </button>
+            ) : (
+              <span className="w-[18px] inline-block" aria-hidden />
+            )}
             <Folder size={14} className="flex-shrink-0 text-muted-foreground" />
             {isRenamingItem ? (
               <input

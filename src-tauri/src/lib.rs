@@ -405,6 +405,12 @@ fn vault_confirm_drag_out(file_id: String) -> Result<(), String> {
     vault_files::vault_confirm_drag_out(&vault_base_path(), &file_id)
 }
 
+/// 드래그아웃 임시 파일만 정리 (금고 유지)
+#[tauri::command]
+fn vault_cleanup_drag_temp(file_id: String) {
+    vault_files::vault_cleanup_drag_temp(&file_id);
+}
+
 /// 스트리밍 프로토콜 핸들러: stream://localhost/{file_id}
 fn handle_stream_request(
     request: http::Request<Vec<u8>>,
@@ -608,6 +614,7 @@ pub fn run() {
             vault_copy_out,
             vault_prepare_drag_out,
             vault_confirm_drag_out,
+            vault_cleanup_drag_temp,
             change_vault_location,
             verify_and_activate_license,
             get_license_status,

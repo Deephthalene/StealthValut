@@ -226,11 +226,20 @@ pub fn vault_move_file(
     if !meta.is_file() {
         return Err("폴더는 업로드할 수 없습니다.".into());
     }
-    let original_name = source_path
+    let mut original_name = source_path
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("unknown")
         .to_string();
+    if let Some(idx) = original_name.find('_') {
+        let prefix = &original_name[..idx];
+        if prefix.len() == 36
+            && uuid::Uuid::parse_str(prefix).is_ok()
+            && idx + 1 < original_name.len()
+        {
+            original_name = original_name[idx + 1..].to_string();
+        }
+    }
     let original_path_str = source_path.to_string_lossy().to_string();
     let size_bytes = meta.len() as i64;
     let created_at = std::time::SystemTime::now()
@@ -991,13 +1000,15 @@ pub fn vault_prepare_drag_out(base: &Path, file_id: &str) -> Result<String, Stri
         return Err("암호화된 파일이 없습니다.".into());
     }
 
-    let temp_dir = std::env::temp_dir().join("stealthvault_drag");
-    fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
+    let file_dir = std::env::temp_dir()
+        .join("stealthvault_drag")
+        .join(file_id);
+    fs::create_dir_all(&file_dir).map_err(|e| e.to_string())?;
     let safe_name = Path::new(&display_name)
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("file");
-    let temp_path = temp_dir.join(format!("{}_{}", file_id, safe_name));
+    let temp_path = file_dir.join(safe_name);
 
     let dest = fs::File::create(&temp_path).map_err(|e| e.to_string())?;
     let mut writer = BufWriter::new(dest);
@@ -1133,6 +1144,24 @@ fn adler32(data: &[u8]) -> u32 {
     (b << 16) | a
 }
 
+/// 드래그아웃 임시 파일만 정리 (금고는 그대로)
+pub fn vault_cleanup_drag_temp(file_id: &str) {
+    let file_dir = std::env::temp_dir()
+        .join("stealthvault_drag")
+        .join(file_id);
+    if file_dir.is_dir() {
+        if let Ok(entries) = fs::read_dir(&file_dir) {
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.is_file() {
+                    let _ = secure_delete(&p);
+                }
+            }
+        }
+        let _ = fs::remove_dir(&file_dir);
+    }
+}
+
 /// 드래그 완료 후 금고에서 삭제 (vault_prepare_drag_out 후 startDrag 끝난 시점에 호출)
 pub fn vault_confirm_drag_out(base: &Path, file_id: &str) -> Result<(), String> {
     let conn = conn(base)?;
@@ -1148,21 +1177,6 @@ pub fn vault_confirm_drag_out(base: &Path, file_id: &str) -> Result<(), String> 
     conn.execute("DELETE FROM files WHERE id = ?1", [file_id])
         .map_err(|e| e.to_string())?;
     let _ = conn.execute("DELETE FROM files_index WHERE id = ?1", [file_id]);
-
-    // Phase 7: 드래그 아웃 임시 파일 secure_delete로 zero-fill 후 삭제 (썸네일 캐시 방어)
-    let temp_dir = std::env::temp_dir().join("stealthvault_drag");
-    if let Ok(entries) = fs::read_dir(&temp_dir) {
-        for e in entries.flatten() {
-            let p = e.path();
-            if p.is_file()
-                && p.file_stem()
-                    .and_then(|s| s.to_str())
-                    .map_or(false, |s| s.starts_with(file_id))
-            {
-                let _ = secure_delete(&p);
-            }
-        }
-    }
 
     Ok(())
 }

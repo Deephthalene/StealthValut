@@ -9,7 +9,7 @@ import {
 import { useVaultStore } from '@/stores/useVaultStore';
 import type { LucideIcon } from 'lucide-react';
 import { LayoutDashboard, Lock, Settings } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 
 const iconMap: Record<string, LucideIcon> = {
@@ -24,7 +24,17 @@ export function IntroForm() {
   const { applyTheme, colorTheme } = useThemeStore();
   const { menuItems } = useMenuStore();
   const { selectedFolderId } = useVaultFolderStore();
-  const onSelectFolder = useVaultFolderNavigate();
+  const onSelectFolderRaw = useVaultFolderNavigate();
+  const handleSelectFolder = useCallback(
+    (id: string | null) => {
+      if (!location.pathname.startsWith('/app/vault')) {
+        setSelectedMenu('Vault');
+        navigate('/app/vault');
+      }
+      onSelectFolderRaw(id);
+    },
+    [location.pathname, navigate, onSelectFolderRaw],
+  );
   const [selectedMenu, setSelectedMenu] = useState<string>(
     menuItems.find((m) => m.path && location.pathname.startsWith(m.path))?.id ??
       menuItems[0]?.id ??
@@ -68,7 +78,7 @@ export function IntroForm() {
         <div className="flex-1 min-h-0 flex flex-col">
           <SidebarFolderTree
             selectedFolderId={selectedFolderId}
-            onSelectFolder={onSelectFolder}
+            onSelectFolder={handleSelectFolder}
           />
         </div>
         <div className="flex flex-col gap-1 p-2 border-t border-border">
