@@ -11,6 +11,7 @@ import { useVaultFolderStore } from '@/stores/useVaultFolderStore';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
+import { FileIcon, Folder } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import VaultContentGrid from './VaultContentGrid';
@@ -629,9 +630,13 @@ function VaultPage() {
     startY: number;
   } | null>(null);
   const internalDragActiveRef = useRef(false);
-  const [internalDragCount, setInternalDragCount] = useState<number | null>(
-    null,
-  );
+  const [internalDragState, setInternalDragState] = useState<{
+    count: number;
+    fileCount: number;
+    folderCount: number;
+    x: number;
+    y: number;
+  } | null>(null);
   const internalDragJustFinishedRef = useRef(false);
 
   const DRAG_THRESHOLD = 5;
@@ -733,11 +738,20 @@ function VaultPage() {
         const dy = e.clientY - d.startY;
         if (dx * dx + dy * dy < DRAG_THRESHOLD * DRAG_THRESHOLD) return;
         internalDragActiveRef.current = true;
-        setInternalDragCount(d.fileIds.length + d.folderIds.length);
+        setInternalDragState({
+          count: d.fileIds.length + d.folderIds.length,
+          fileCount: d.fileIds.length,
+          folderCount: d.folderIds.length,
+          x: e.clientX,
+          y: e.clientY,
+        });
         document.body.style.cursor = 'grabbing';
         document.body.style.userSelect = 'none';
       }
 
+      setInternalDragState((prev) =>
+        prev ? { ...prev, x: e.clientX, y: e.clientY } : null,
+      );
       const el = document.elementFromPoint(e.clientX, e.clientY);
       const card = el?.closest('[data-vault-folder-id]') as HTMLElement | null;
       const folderId = card?.getAttribute('data-vault-folder-id') ?? null;
@@ -748,7 +762,7 @@ function VaultPage() {
       const wasActive = internalDragActiveRef.current;
       internalDragRef.current = null;
       internalDragActiveRef.current = false;
-      setInternalDragCount(null);
+      setInternalDragState(null);
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
       setDragOverFolderId(null);
@@ -1051,13 +1065,38 @@ function VaultPage() {
 
   return (
     <div className="flex flex-col h-full min-h-0 relative">
-      {internalDragCount !== null && (
+      {internalDragState && (
         <div
-          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[80] px-4 py-2 rounded-lg bg-primary/90 text-primary-foreground text-sm font-medium shadow-lg flex items-center gap-2 pointer-events-none"
+          className="fixed z-[100] pointer-events-none"
+          style={{
+            left: internalDragState.x + 16,
+            top: internalDragState.y + 12,
+          }}
           aria-hidden
         >
-          <span className="animate-pulse">{internalDragCount}개 항목</span>
-          <span className="opacity-90">이동 중...</span>
+          <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl bg-card/80 backdrop-blur-md border border-border/70 shadow-2xl shadow-black/20 min-w-[120px] scale-105">
+            <div className="flex items-center gap-1">
+              {internalDragState.folderCount > 0 && (
+                <div className="w-8 h-8 rounded-lg bg-amber-500/25 flex items-center justify-center border border-amber-500/50 shrink-0">
+                  <Folder
+                    size={16}
+                    className="text-amber-600 dark:text-amber-400"
+                  />
+                </div>
+              )}
+              {internalDragState.fileCount > 0 && (
+                <div className="w-8 h-8 rounded-lg bg-blue-500/25 flex items-center justify-center border border-blue-500/50 shrink-0">
+                  <FileIcon
+                    size={16}
+                    className="text-blue-600 dark:text-blue-400"
+                  />
+                </div>
+              )}
+            </div>
+            <span className="text-sm font-medium text-foreground">
+              {internalDragState.count}개 항목 이동 중
+            </span>
+          </div>
         </div>
       )}
       <VaultModals
