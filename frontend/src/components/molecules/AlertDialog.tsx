@@ -1,3 +1,5 @@
+import { useTranslation } from 'react-i18next';
+
 export type AlertType = 'success' | 'error' | 'info' | 'warning';
 export type AlertTitle = 'SUCCESS' | 'ERROR' | 'INFO' | 'WARNING' | 'ALERT';
 
@@ -35,13 +37,16 @@ export function AlertDialog({
   onOpenChange,
   title,
   description,
-  confirmText = '확인',
-  cancelText = '취소',
+  confirmText,
+  cancelText,
   onConfirm,
   onCancel,
   showCancel = false,
   confirmVariant = 'default',
 }: AlertDialogProps) {
+  const { t } = useTranslation();
+  const resolvedConfirm = confirmText ?? t('common.confirm');
+  const resolvedCancel = cancelText ?? t('common.cancel');
   if (!open) return null;
 
   const handleClose = (val = false) => {
@@ -68,7 +73,7 @@ export function AlertDialog({
                 handleClose(false);
               }}
             >
-              {cancelText}
+              {resolvedCancel}
             </button>
           )}
           <button
@@ -82,7 +87,7 @@ export function AlertDialog({
               handleClose(false);
             }}
           >
-            {confirmText}
+            {resolvedConfirm}
           </button>
         </div>
       </div>

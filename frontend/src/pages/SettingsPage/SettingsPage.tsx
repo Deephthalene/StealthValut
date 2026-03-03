@@ -1,15 +1,23 @@
-import { AUTO_LOCK_OPTIONS, useSettingsStore } from '@/stores/useSettingsStore';
+import {
+  AUTO_LOCK_OPTIONS,
+  type LanguageCode,
+  useSettingsStore,
+} from '@/stores/useSettingsStore';
+import { useThemeStore } from '@/stores/useThemeStore';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import {
   Crown,
   FolderOpen,
+  Image,
   Keyboard,
   Loader2,
   Lock,
+  Palette,
   Timer,
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
 function isTauriEnv(): boolean {
@@ -17,6 +25,13 @@ function isTauriEnv(): boolean {
 }
 
 const MODIFIER_ORDER = ['Ctrl', 'Shift', 'Alt'];
+
+const LANGUAGE_OPTIONS: { value: LanguageCode; label: string }[] = [
+  { value: 'ko', label: '한국어' },
+  { value: 'en', label: 'English' },
+  { value: 'ja', label: '日本語' },
+  { value: 'zh', label: '中文' },
+];
 
 function formatChord(keys: Set<string>): string {
   const mods = MODIFIER_ORDER.filter((m) => keys.has(m));
@@ -42,9 +57,13 @@ function isValidChord(parts: Set<string>): boolean {
 function HotkeyInput({
   value,
   onChange,
+  placeholder,
+  recordingLabel,
 }: {
   value: string;
   onChange: (v: string) => void;
+  placeholder: string;
+  recordingLabel: string;
 }) {
   const [recording, setRecording] = useState(false);
   const keysPressedRef = useRef<Set<string>>(new Set());
@@ -93,14 +112,29 @@ function HotkeyInput({
           : 'border-border bg-secondary text-secondary-foreground hover:bg-accent'
       }`}
     >
-      {recording ? '키 입력 대기...' : value || '미설정'}
+      {recording ? recordingLabel : value || placeholder}
     </button>
   );
 }
 
 export default function SettingsPage() {
-  const { autoLockMinutes, setAutoLockMinutes, lockHotkey, setLockHotkey } =
-    useSettingsStore();
+  const { t } = useTranslation();
+  const {
+    autoLockMinutes,
+    setAutoLockMinutes,
+    lockHotkey,
+    setLockHotkey,
+    language,
+    setLanguage,
+  } = useSettingsStore();
+  const {
+    mode,
+    colorTheme,
+    backgroundImage,
+    setMode,
+    setColorTheme,
+    setBackgroundImage,
+  } = useThemeStore();
   const [vaultPath, setVaultPath] = useState('');
   const [pathLoading, setPathLoading] = useState(false);
   const [pathChanging, setPathChanging] = useState(false);
@@ -158,7 +192,7 @@ export default function SettingsPage() {
         directory: true,
         multiple: false,
         defaultPath: vaultPath || undefined,
-        title: '저장 위치 선택',
+        title: t('settings.selectStorageLocation'),
       });
       if (selected) setConfirmModal({ newPath: selected });
     } catch {
@@ -207,23 +241,23 @@ export default function SettingsPage() {
     setPwError('');
 
     if (!pwCurrent.trim()) {
-      setPwError('현재 비밀번호를 입력해주세요.');
+      setPwError(t('pwErrors.enterCurrent'));
       return;
     }
     if (!pwNew) {
-      setPwError('새 비밀번호를 입력해주세요.');
+      setPwError(t('pwErrors.enterNew'));
       return;
     }
     if (pwNew.length < 6) {
-      setPwError('새 비밀번호는 6자 이상이어야 합니다.');
+      setPwError(t('pwErrors.minLength'));
       return;
     }
     if (pwNew !== pwConfirm) {
-      setPwError('새 비밀번호와 확인이 일치하지 않습니다.');
+      setPwError(t('pwErrors.mismatch'));
       return;
     }
     if (pwCurrent === pwNew) {
-      setPwError('현재 비밀번호와 새 비밀번호가 같습니다.');
+      setPwError(t('pwErrors.sameAsCurrent'));
       return;
     }
 
@@ -233,22 +267,27 @@ export default function SettingsPage() {
         currentPassword: pwCurrent,
         newPassword: pwNew,
       });
-      toast.success('비밀번호가 변경되었습니다.');
+      toast.success(t('pwErrors.changed'));
       setPwModal(false);
       setPwCurrent('');
       setPwNew('');
       setPwConfirm('');
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes('현재 비밀번호')) {
-        setPwError('현재 비밀번호가 올바르지 않습니다.');
+      if (
+        msg.includes('현재 비밀번호') ||
+        msg.includes('current password') ||
+        msg.includes('incorrect') ||
+        msg.includes('wrong')
+      ) {
+        setPwError(t('pwErrors.wrongCurrent'));
       } else {
         setPwError(msg);
       }
     } finally {
       setPwLoading(false);
     }
-  }, [pwCurrent, pwNew, pwConfirm]);
+  }, [pwCurrent, pwNew, pwConfirm, t]);
 
   const closePwModal = () => {
     setPwModal(false);
@@ -258,19 +297,121 @@ export default function SettingsPage() {
     setPwError('');
   };
 
+  const handleSelectBackground = useCallback(async () => {
+    if (!isTauriEnv()) return;
+    try {
+      const selected = await open({
+        directory: false,
+        multiple: false,
+        title: t('settings.backgroundSelect'),
+        filters: [
+          {
+            name: t('settings.imageFilter'),
+            extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'],
+          },
+        ],
+      });
+      if (selected) setBackgroundImage(selected);
+    } catch {
+      /* ignore */
+    }
+  }, [setBackgroundImage, t]);
+
   return (
     <div className="divide-y divide-border">
+      <div className="flex flex-col gap-3 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <span className="flex items-center gap-2 text-sm shrink-0">
+          <Palette size={15} className="text-muted-foreground" />
+          {t('settings.theme')}
+        </span>
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setMode(mode === 'light' ? 'dark' : 'light')}
+              className="px-3 py-1.5 rounded-lg text-xs border border-border bg-secondary hover:bg-accent"
+            >
+              {mode === 'light'
+                ? t('settings.themeLight')
+                : t('settings.themeDark')}
+            </button>
+            <div className="flex gap-1">
+              {(
+                ['blue', 'green', 'purple', 'orange', 'rose', 'cyan'] as const
+              ).map((c) => (
+                <button
+                  key={c}
+                  onClick={() => setColorTheme(c)}
+                  className={`w-6 h-6 rounded-full border-2 transition ${
+                    colorTheme === c
+                      ? 'border-primary scale-110'
+                      : 'border-transparent'
+                  }`}
+                  style={{
+                    backgroundColor:
+                      c === 'blue'
+                        ? '#3B82F6'
+                        : c === 'green'
+                          ? '#16A34A'
+                          : c === 'purple'
+                            ? '#A855F7'
+                            : c === 'orange'
+                              ? '#F97316'
+                              : c === 'rose'
+                                ? '#F43F5E'
+                                : '#06B6D4',
+                  }}
+                  title={c}
+                />
+              ))}
+            </div>
+          </div>
+          {isTauriEnv() && (
+            <div className="flex items-center gap-2">
+              <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                <Image size={12} />
+                {t('settings.background')}
+              </span>
+              <button
+                type="button"
+                onClick={handleSelectBackground}
+                className="px-3 py-1 rounded text-xs border border-border bg-secondary hover:bg-accent"
+              >
+                {t('settings.backgroundSelect')}
+              </button>
+              {backgroundImage && (
+                <button
+                  type="button"
+                  onClick={() => setBackgroundImage('')}
+                  className="px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground"
+                >
+                  {t('settings.backgroundRemove')}
+                </button>
+              )}
+              {backgroundImage && (
+                <span
+                  className="text-xs text-muted-foreground truncate max-w-[120px]"
+                  title={backgroundImage}
+                >
+                  {backgroundImage.split(/[/\\]/).pop() ||
+                    t('settings.selected')}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
       <div className="flex items-center justify-between px-6 py-4">
         <span className="flex items-center gap-2 text-sm">
-          <Timer size={15} className="text-muted-foreground" />
-          자동 잠금
+          <span className="text-muted-foreground">🌐</span>
+          {t('settings.language')}
         </span>
         <select
-          value={autoLockMinutes}
-          onChange={(e) => setAutoLockMinutes(Number(e.target.value))}
+          value={language}
+          onChange={(e) => setLanguage(e.target.value as LanguageCode)}
           className="px-3 py-1.5 rounded-lg text-xs border border-border bg-secondary text-secondary-foreground hover:bg-accent cursor-pointer"
         >
-          {AUTO_LOCK_OPTIONS.map((opt) => (
+          {LANGUAGE_OPTIONS.map((opt) => (
             <option key={opt.value} value={opt.value}>
               {opt.label}
             </option>
@@ -280,24 +421,47 @@ export default function SettingsPage() {
 
       <div className="flex items-center justify-between px-6 py-4">
         <span className="flex items-center gap-2 text-sm">
-          <Keyboard size={15} className="text-muted-foreground" />
-          잠금 단축키 (2~3개 키 조합)
+          <Timer size={15} className="text-muted-foreground" />
+          {t('settings.autoLock')}
         </span>
-        <HotkeyInput value={lockHotkey} onChange={setLockHotkey} />
+        <select
+          value={autoLockMinutes}
+          onChange={(e) => setAutoLockMinutes(Number(e.target.value))}
+          className="px-3 py-1.5 rounded-lg text-xs border border-border bg-secondary text-secondary-foreground hover:bg-accent cursor-pointer"
+        >
+          {AUTO_LOCK_OPTIONS.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {t('settings.autoLockMinutes', { count: opt.value })}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="flex items-center justify-between px-6 py-4">
+        <span className="flex items-center gap-2 text-sm">
+          <Keyboard size={15} className="text-muted-foreground" />
+          {t('settings.lockShortcut')}
+        </span>
+        <HotkeyInput
+          value={lockHotkey}
+          onChange={setLockHotkey}
+          placeholder={t('settings.lockShortcutPlaceholder')}
+          recordingLabel={t('settings.lockShortcutRecording')}
+        />
       </div>
 
       {isTauriEnv() && (
         <div className="flex items-center justify-between px-6 py-4">
           <span className="flex items-center gap-2 text-sm">
             <Lock size={15} className="text-muted-foreground" />
-            비밀번호 변경
+            {t('settings.changePassword')}
           </span>
           <button
             type="button"
             onClick={() => setPwModal(true)}
             className="px-4 py-1.5 rounded-lg text-xs font-medium border border-border bg-secondary hover:bg-accent transition-colors"
           >
-            변경
+            {t('settings.change')}
           </button>
         </div>
       )}
@@ -307,7 +471,7 @@ export default function SettingsPage() {
           <div className="flex items-center justify-between gap-2">
             <span className="flex items-center gap-2 text-sm">
               <FolderOpen size={15} className="text-muted-foreground" />
-              저장 위치
+              {t('settings.storageLocation')}
             </span>
             <button
               type="button"
@@ -318,7 +482,7 @@ export default function SettingsPage() {
               {pathChanging ? (
                 <Loader2 size={14} className="animate-spin" />
               ) : (
-                '변경'
+                t('settings.change')
               )}
             </button>
           </div>
@@ -335,11 +499,13 @@ export default function SettingsPage() {
       <div className="flex items-center justify-between px-6 py-4">
         <span className="flex items-center gap-2 text-sm">
           <Crown size={15} className="text-muted-foreground" />
-          프리미엄
+          {t('settings.premium')}
         </span>
         {licenseStatus?.is_premium ? (
           <div className="flex items-center gap-2">
-            <span className="text-xs text-primary">프리미엄 ✓</span>
+            <span className="text-xs text-primary">
+              {t('settings.premiumActive')}
+            </span>
             {licenseStatus.email && (
               <span
                 className="text-xs text-muted-foreground truncate max-w-[120px]"
@@ -353,7 +519,7 @@ export default function SettingsPage() {
               onClick={() => setActivateModal(true)}
               className="px-3 py-1 rounded text-xs border border-border hover:bg-accent"
             >
-              정보
+              {t('settings.info')}
             </button>
           </div>
         ) : (
@@ -362,7 +528,7 @@ export default function SettingsPage() {
             onClick={() => setPurchaseModal(true)}
             className="px-4 py-1.5 rounded-lg text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
           >
-            업그레이드
+            {t('settings.upgrade')}
           </button>
         )}
       </div>
@@ -371,10 +537,14 @@ export default function SettingsPage() {
       {pwModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="bg-card border border-border rounded-lg shadow-lg p-6 max-w-md mx-4">
-            <h3 className="font-semibold text-sm mb-4">비밀번호 변경</h3>
+            <h3 className="font-semibold text-sm mb-4">
+              {t('settingsModals.changePasswordTitle')}
+            </h3>
             <div className="space-y-3 mb-4">
               <div>
-                <label className="block text-xs mb-1">현재 비밀번호 *</label>
+                <label className="block text-xs mb-1">
+                  {t('settingsModals.currentPassword')}
+                </label>
                 <input
                   type="password"
                   value={pwCurrent}
@@ -382,7 +552,7 @@ export default function SettingsPage() {
                     setPwCurrent(e.target.value);
                     setPwError('');
                   }}
-                  placeholder="현재 비밀번호 입력"
+                  placeholder={t('settingsModals.currentPasswordPlaceholder')}
                   className="w-full px-3 py-2 rounded-lg text-sm border border-border bg-secondary"
                   autoFocus
                   onKeyDown={(e) => {
@@ -392,7 +562,7 @@ export default function SettingsPage() {
               </div>
               <div>
                 <label className="block text-xs mb-1">
-                  새 비밀번호 * (6자 이상)
+                  {t('settingsModals.newPassword')}
                 </label>
                 <input
                   type="password"
@@ -401,7 +571,7 @@ export default function SettingsPage() {
                     setPwNew(e.target.value);
                     setPwError('');
                   }}
-                  placeholder="새 비밀번호 입력"
+                  placeholder={t('settingsModals.newPasswordPlaceholder')}
                   className="w-full px-3 py-2 rounded-lg text-sm border border-border bg-secondary"
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') handleChangePassword();
@@ -409,7 +579,9 @@ export default function SettingsPage() {
                 />
               </div>
               <div>
-                <label className="block text-xs mb-1">새 비밀번호 확인 *</label>
+                <label className="block text-xs mb-1">
+                  {t('settingsModals.confirmPassword')}
+                </label>
                 <input
                   type="password"
                   value={pwConfirm}
@@ -417,7 +589,7 @@ export default function SettingsPage() {
                     setPwConfirm(e.target.value);
                     setPwError('');
                   }}
-                  placeholder="새 비밀번호 다시 입력"
+                  placeholder={t('settingsModals.confirmPasswordPlaceholder')}
                   className="w-full px-3 py-2 rounded-lg text-sm border border-border bg-secondary"
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') handleChangePassword();
@@ -435,7 +607,7 @@ export default function SettingsPage() {
                 disabled={pwLoading}
                 className="px-4 py-2 rounded-lg text-xs border border-border hover:bg-accent disabled:opacity-50"
               >
-                취소
+                {t('common.cancel')}
               </button>
               <button
                 type="button"
@@ -446,7 +618,7 @@ export default function SettingsPage() {
                 {pwLoading ? (
                   <Loader2 size={14} className="animate-spin" />
                 ) : (
-                  '변경'
+                  t('settings.change')
                 )}
               </button>
             </div>
@@ -457,10 +629,11 @@ export default function SettingsPage() {
       {confirmModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="bg-card border border-border rounded-lg shadow-lg p-6 max-w-md mx-4">
-            <h3 className="font-semibold text-sm mb-2">저장 위치 변경</h3>
+            <h3 className="font-semibold text-sm mb-2">
+              {t('settingsModals.changeLocationTitle')}
+            </h3>
             <p className="text-sm text-muted-foreground mb-4">
-              저장 위치를 변경하면 모든 파일이 새 경로로 이동됩니다. 파일 크기에
-              따라 시간이 걸릴 수 있습니다. 계속하시겠습니까?
+              {t('settingsModals.changeLocationDesc')}
             </p>
             <p
               className="text-xs text-muted-foreground mb-4 truncate"
@@ -481,7 +654,7 @@ export default function SettingsPage() {
                 disabled={pathChanging}
                 className="px-4 py-2 rounded-lg text-xs border border-border hover:bg-accent disabled:opacity-50"
               >
-                취소
+                {t('common.cancel')}
               </button>
               <button
                 type="button"
@@ -492,7 +665,7 @@ export default function SettingsPage() {
                 {pathChanging ? (
                   <Loader2 size={14} className="animate-spin" />
                 ) : (
-                  '계속'
+                  t('settingsModals.continue')
                 )}
               </button>
             </div>
@@ -504,7 +677,7 @@ export default function SettingsPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="bg-card border border-border rounded-lg shadow-lg p-6 max-w-md mx-4 max-h-[90vh] overflow-y-auto">
             <h3 className="font-semibold text-sm mb-4">
-              StealthVault 프리미엄
+              {t('settingsModals.purchaseTitle')}
             </h3>
             {purchaseSuccess ? (
               <p className="text-sm text-muted-foreground mb-4">
@@ -525,17 +698,19 @@ export default function SettingsPage() {
                       type="text"
                       value={purchaseName}
                       onChange={(e) => setPurchaseName(e.target.value)}
-                      placeholder="홍길동"
+                      placeholder={t('settingsModals.namePlaceholder')}
                       className="w-full px-3 py-2 rounded-lg text-sm border border-border bg-secondary"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs mb-1">이메일 *</label>
+                    <label className="block text-xs mb-1">
+                      {t('settingsModals.email')}
+                    </label>
                     <input
                       type="email"
                       value={purchaseEmail}
                       onChange={(e) => setPurchaseEmail(e.target.value)}
-                      placeholder="user@example.com"
+                      placeholder={t('settingsModals.emailPlaceholder')}
                       className="w-full px-3 py-2 rounded-lg text-sm border border-border bg-secondary"
                     />
                   </div>
@@ -575,7 +750,7 @@ export default function SettingsPage() {
                   }}
                   className="px-4 py-2 rounded-lg text-xs border border-border hover:bg-accent"
                 >
-                  닫기
+                  {t('settingsModals.close')}
                 </button>
               ) : (
                 <>
@@ -583,7 +758,7 @@ export default function SettingsPage() {
                     type="button"
                     onClick={async () => {
                       if (!purchaseName.trim() || !purchaseEmail.trim()) {
-                        setPurchaseError('이름과 이메일을 입력해주세요.');
+                        setPurchaseError(t('settingsModals.enterNameAndEmail'));
                         return;
                       }
                       setPurchaseError('');
@@ -598,7 +773,7 @@ export default function SettingsPage() {
                         setPurchaseError(
                           e instanceof Error
                             ? e.message
-                            : '요청 전송에 실패했습니다.',
+                            : t('settingsModals.requestFailed'),
                         );
                       } finally {
                         setPurchaseLoading(false);
@@ -613,7 +788,7 @@ export default function SettingsPage() {
                         전송 중...
                       </>
                     ) : (
-                      '구매 요청 보내기'
+                      t('settingsModals.sendRequest')
                     )}
                   </button>
                   <button
@@ -624,7 +799,7 @@ export default function SettingsPage() {
                     }}
                     className="px-4 py-2 rounded-lg text-xs border border-border hover:bg-accent"
                   >
-                    닫기
+                    {t('settingsModals.close')}
                   </button>
                 </>
               )}
@@ -637,11 +812,14 @@ export default function SettingsPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="bg-card border border-border rounded-lg shadow-lg p-6 max-w-md mx-4">
             <h3 className="font-semibold text-sm mb-4">
-              {licenseStatus?.is_premium ? '라이센스 정보' : '라이센스 활성화'}
+              {licenseStatus?.is_premium
+                ? t('settingsModals.licenseInfo')
+                : t('settingsModals.licenseActivate')}
             </h3>
             {licenseStatus?.is_premium ? (
               <p className="text-sm text-muted-foreground mb-4">
-                활성화된 이메일: {licenseStatus.email || '—'}
+                {t('settingsModals.activatedEmail')}:{' '}
+                {licenseStatus.email || '—'}
               </p>
             ) : (
               <>
@@ -658,13 +836,13 @@ export default function SettingsPage() {
                   </div>
                   <div>
                     <label className="block text-xs mb-1">
-                      구매 시 입력한 이메일 *
+                      {t('settingsModals.purchaseEmail')}
                     </label>
                     <input
                       type="email"
                       value={activateEmail}
                       onChange={(e) => setActivateEmail(e.target.value)}
-                      placeholder="user@example.com"
+                      placeholder={t('settingsModals.emailPlaceholder')}
                       className="w-full px-3 py-2 rounded-lg text-sm border border-border bg-secondary"
                     />
                   </div>
@@ -687,7 +865,9 @@ export default function SettingsPage() {
                 }}
                 className="px-4 py-2 rounded-lg text-xs border border-border hover:bg-accent"
               >
-                {licenseStatus?.is_premium ? '닫기' : '취소'}
+                {licenseStatus?.is_premium
+                  ? t('settingsModals.close')
+                  : t('common.cancel')}
               </button>
               {!licenseStatus?.is_premium && (
                 <button
@@ -699,7 +879,7 @@ export default function SettingsPage() {
                   {activateLoading ? (
                     <Loader2 size={14} className="animate-spin" />
                   ) : (
-                    '활성화'
+                    t('settingsModals.activate')
                   )}
                 </button>
               )}

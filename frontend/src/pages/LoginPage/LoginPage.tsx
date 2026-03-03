@@ -1,9 +1,11 @@
 import { AuthLayout, LoginCard } from '@/components/templates';
 import { ROLE, useAuthStore } from '@/stores/useAuthStore';
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
 export default function LoginPage() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
@@ -35,7 +37,7 @@ export default function LoginPage() {
       );
       navigate('/app', { replace: true });
     } catch {
-      setError('로그인에 실패했습니다.');
+      setError(t('login.loginFailed'));
     } finally {
       setIsLoading(false);
     }

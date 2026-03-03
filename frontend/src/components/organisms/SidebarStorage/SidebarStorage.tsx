@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 interface QuotaResult {
   disk_free_bytes: number;
@@ -23,6 +24,7 @@ export function dispatchVaultFilesChanged() {
 }
 
 export default function SidebarStorage() {
+  const { t } = useTranslation();
   const [quota, setQuota] = useState<QuotaResult | null>(null);
 
   useEffect(() => {
@@ -55,19 +57,24 @@ export default function SidebarStorage() {
   return (
     <div className="px-3 py-3 border-b border-border">
       <p className="text-xs font-medium text-muted-foreground mb-2">
-        저장 공간
+        {t('sidebar.storage')}
         {quota.is_premium && (
           <span className="ml-1.5 text-[10px] text-primary font-semibold">
-            프리미엄
+            {t('settings.premium')}
           </span>
         )}
       </p>
       <div className="space-y-1.5 text-xs text-foreground">
-        <div>하드 여유: {quota.disk_free_gb.toFixed(1)} GB</div>
         <div>
-          금고 사용: {quota.vault_used_gb.toFixed(2)} GB / {limitLabel}
+          {t('sidebar.diskFree')}: {quota.disk_free_gb.toFixed(1)} GB
+        </div>
+        <div>
+          {t('sidebar.vaultUsed')}: {quota.vault_used_gb.toFixed(2)} GB /{' '}
+          {limitLabel}
           {quota.is_premium && (
-            <span className="ml-1 text-muted-foreground">(디스크)</span>
+            <span className="ml-1 text-muted-foreground">
+              ({t('sidebar.disk')})
+            </span>
           )}
         </div>
       </div>
@@ -79,7 +86,7 @@ export default function SidebarStorage() {
       </div>
       {!quota.can_deposit && (
         <p className="mt-1 text-[10px] text-amber-600 dark:text-amber-500">
-          {quota.is_premium ? '디스크 공간 부족' : '한도 도달'}
+          {quota.is_premium ? t('sidebar.diskFull') : t('sidebar.limitReached')}
         </p>
       )}
     </div>

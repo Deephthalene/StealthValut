@@ -1,7 +1,9 @@
 import { useVaultStore } from '@/stores/useVaultStore';
 import { Lock } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 function Header() {
+  const { t } = useTranslation();
   const { lock } = useVaultStore();
 
   return (
@@ -13,10 +15,10 @@ function Header() {
         <button
           onClick={lock}
           className="flex items-center gap-2 px-4 py-2 rounded-lg text-primary-foreground/90 hover:bg-primary-foreground/10 transition-colors"
-          title="금고 잠금"
+          title={t('nav.lockVault')}
         >
           <Lock size={18} />
-          <span className="text-sm font-medium">잠금</span>
+          <span className="text-sm font-medium">{t('common.lock')}</span>
         </button>
       </div>
     </header>

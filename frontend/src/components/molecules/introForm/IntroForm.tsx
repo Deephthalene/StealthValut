@@ -1,7 +1,9 @@
 import SidebarFolderTree from '@/components/organisms/SidebarFolderTree/SidebarFolderTree';
 import SidebarStorage from '@/components/organisms/SidebarStorage/SidebarStorage';
 import { useMenuStore } from '@/stores/useMenuStore';
+import { useTranslation } from 'react-i18next';
 import { useThemeStore } from '@/stores/useThemeStore';
+import { convertFileSrc } from '@tauri-apps/api/core';
 import {
   useVaultFolderNavigate,
   useVaultFolderStore,
@@ -18,10 +20,11 @@ const iconMap: Record<string, LucideIcon> = {
 };
 
 export function IntroForm() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
   const { lock } = useVaultStore();
-  const { applyTheme, colorTheme } = useThemeStore();
+  const { applyTheme, colorTheme, backgroundImage } = useThemeStore();
   const { menuItems } = useMenuStore();
   const { selectedFolderId } = useVaultFolderStore();
   const onSelectFolderRaw = useVaultFolderNavigate();
@@ -70,10 +73,35 @@ export function IntroForm() {
     }
   }, [location.pathname, menuItems, selectedMenu]);
 
+  const bgImageUrl =
+    backgroundImage &&
+    (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+      ? convertFileSrc(backgroundImage)
+      : backgroundImage.startsWith('http')
+        ? backgroundImage
+        : '');
+
   return (
-    <div className="h-dvh flex overflow-hidden bg-background text-foreground">
-      {/* 사이드바: 고정 폭, 저장공간(상단) + 폴더트리(하단) + 네비 */}
-      <aside className="flex flex-col flex-shrink-0 w-48 border-r border-border bg-secondary/50 overflow-hidden">
+    <div
+      className="h-dvh flex overflow-hidden bg-background text-foreground relative"
+      style={
+        bgImageUrl
+          ? {
+              backgroundImage: `url(${bgImageUrl})`,
+              backgroundSize: 'cover',
+              backgroundPosition: 'center',
+            }
+          : undefined
+      }
+    >
+      {bgImageUrl && (
+        <div
+          className="absolute inset-0 bg-background/85 backdrop-blur-[1px] pointer-events-none z-0"
+          aria-hidden
+        />
+      )}
+      {/* 사이드바 */}
+      <aside className="relative z-10 flex flex-col flex-shrink-0 w-48 border-r border-border bg-secondary/50 overflow-hidden">
         <SidebarStorage />
         <div className="flex-1 min-h-0 flex flex-col">
           <SidebarFolderTree
@@ -100,21 +128,21 @@ export function IntroForm() {
                   const Icon = iconMap[item.icon];
                   return Icon ? <Icon size={18} /> : null;
                 })()}
-              <span>{item.label}</span>
+              <span>{t(item.label)}</span>
             </button>
           ))}
         </div>
       </aside>
 
-      <main className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
+      <main className="relative z-10 flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
         <div className="flex items-center justify-end px-4 py-2 shrink-0">
           <button
             onClick={lock}
             className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
-            title="금고 잠금"
+            title={t('nav.lockVault')}
           >
             <Lock size={14} />
-            <span>잠금</span>
+            <span>{t('common.lock')}</span>
           </button>
         </div>
         <div className="flex-1 min-h-0 overflow-auto p-4">

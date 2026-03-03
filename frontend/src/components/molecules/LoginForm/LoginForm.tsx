@@ -1,5 +1,6 @@
 import { Button, Input, Label } from '@/components/atoms';
 import { FormEvent, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 interface LoginFormProps {
   onSubmit: (userId: string, password: string) => void | Promise<void>;
@@ -8,6 +9,7 @@ interface LoginFormProps {
 }
 
 function LoginForm({ onSubmit, isLoading, error }: LoginFormProps) {
+  const { t } = useTranslation();
   const [userId, setUserId] = useState('');
   const [password, setPassword] = useState('');
 
@@ -19,28 +21,28 @@ function LoginForm({ onSubmit, isLoading, error }: LoginFormProps) {
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
       <div className="space-y-1 flex flex-col">
-        <Label htmlFor="userId">아이디</Label>
+        <Label htmlFor="userId">{t('login.userId')}</Label>
         <Input
           className="h-10"
           id="userId"
           type="text"
           value={userId}
           onChange={(e) => setUserId(e.target.value)}
-          placeholder="아이디를 입력하세요"
+          placeholder={t('login.userIdPlaceholder')}
           required
           disabled={isLoading}
         />
       </div>
 
       <div className="space-y-2 flex flex-col">
-        <Label htmlFor="password">비밀번호</Label>
+        <Label htmlFor="password">{t('login.password')}</Label>
         <Input
           className="h-10"
           id="password"
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          placeholder="비밀번호를 입력하세요"
+          placeholder={t('login.passwordPlaceholder')}
           required
           disabled={isLoading}
         />
@@ -54,7 +56,7 @@ function LoginForm({ onSubmit, isLoading, error }: LoginFormProps) {
         className="w-full"
         disabled={isLoading}
       >
-        {isLoading ? '로그인 중...' : '로그인'}
+        {isLoading ? t('login.loggingIn') : t('login.login')}
       </Button>
     </form>
   );

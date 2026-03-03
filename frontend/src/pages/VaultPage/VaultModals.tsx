@@ -1,4 +1,5 @@
 import { Folder, Loader2 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import type { FileItem, FolderItem } from './types';
 
 interface VaultModalsProps {
@@ -36,6 +37,7 @@ export default function VaultModals({
   onMoveFile,
   onBulkMove,
 }: VaultModalsProps) {
+  const { t } = useTranslation();
   return (
     <>
       {showProgress && (
@@ -44,12 +46,18 @@ export default function VaultModals({
             <Loader2 size={32} className="animate-spin text-primary" />
             <p className="text-sm font-medium">
               {uploadProgress
-                ? `업로드 중... ${uploadProgress.current}/${uploadProgress.total}`
+                ? t('vaultModals.uploadingProgress', {
+                    current: uploadProgress.current,
+                    total: uploadProgress.total,
+                  })
                 : exportProgress
-                  ? `내보내기 중... ${exportProgress.current}/${exportProgress.total}`
+                  ? t('vaultModals.exportingProgress', {
+                      current: exportProgress.current,
+                      total: exportProgress.total,
+                    })
                   : uploading
-                    ? '처리 중...'
-                    : '내보내는 중...'}
+                    ? t('vaultModals.processing')
+                    : t('vaultModals.exporting')}
             </p>
             {(uploadProgress || exportProgress) && (
               <div className="w-48 h-1.5 bg-muted rounded-full overflow-hidden">
@@ -68,23 +76,17 @@ export default function VaultModals({
       {deleteTarget && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 backdrop-blur-sm">
           <div className="bg-card border rounded-xl shadow-2xl p-6 max-w-sm w-full mx-4">
-            <h3 className="text-base font-semibold mb-2">삭제 확인</h3>
+            <h3 className="text-base font-semibold mb-2">
+              {t('vaultModals.deleteConfirm')}
+            </h3>
             <p className="text-sm text-muted-foreground mb-4">
               {deleteTarget.type === 'folder' ? (
-                <>
-                  <span className="font-medium text-foreground">
-                    {deleteTarget.name}
-                  </span>
-                  과(와) 하위 항목을 모두 삭제하시겠습니까?
-                </>
+                t('vaultModals.deleteFolderDesc', { name: deleteTarget.name })
               ) : (
                 <>
-                  <span className="font-medium text-foreground">
-                    {deleteTarget.name}
-                  </span>
-                  을(를) 정말 삭제하시겠습니까?
+                  {t('vaultModals.deleteFileDesc', { name: deleteTarget.name })}
                   <span className="block mt-1 text-rose-400">
-                    이 작업은 되돌릴 수 없습니다.
+                    {t('vaultModals.cannotUndo')}
                   </span>
                 </>
               )}
@@ -95,7 +97,7 @@ export default function VaultModals({
                 className="px-4 py-2 rounded-lg text-sm border border-border hover:bg-accent"
                 onClick={() => setDeleteTarget(null)}
               >
-                취소
+                {t('common.cancel')}
               </button>
               <button
                 type="button"
@@ -105,7 +107,7 @@ export default function VaultModals({
                   setDeleteTarget(null);
                 }}
               >
-                삭제
+                {t('common.delete')}
               </button>
             </div>
           </div>
@@ -115,26 +117,21 @@ export default function VaultModals({
       {(movingFile || bulkMoveItems) && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 backdrop-blur-sm">
           <div className="bg-card border rounded-xl shadow-2xl p-6 max-w-sm w-full mx-4">
-            <h3 className="text-base font-semibold mb-3">폴더 이동</h3>
+            <h3 className="text-base font-semibold mb-3">
+              {t('vaultModals.moveFolder')}
+            </h3>
             <p className="text-sm text-muted-foreground mb-3">
-              {movingFile ? (
-                <>
-                  <span className="font-medium text-foreground">
-                    {movingFile.original_name}
-                  </span>
-                  을(를) 어디로 이동할까요?
-                </>
-              ) : bulkMoveItems ? (
-                <>
-                  선택한{' '}
-                  <span className="font-medium text-foreground">
-                    {bulkMoveItems.fileIds.length +
-                      bulkMoveItems.folderIds.length}
-                    개 항목
-                  </span>
-                  을(를) 어디로 이동할까요?
-                </>
-              ) : null}
+              {movingFile
+                ? t('vaultModals.moveFilePrompt', {
+                    name: movingFile.original_name,
+                  })
+                : bulkMoveItems
+                  ? t('vaultModals.moveItemsPrompt', {
+                      count:
+                        bulkMoveItems.fileIds.length +
+                        bulkMoveItems.folderIds.length,
+                    })
+                  : null}
             </p>
             <div className="max-h-60 overflow-auto border rounded-lg mb-4">
               <button
@@ -147,8 +144,8 @@ export default function VaultModals({
                   else if (bulkMoveItems) onBulkMove(null);
                 }}
               >
-                <Folder size={16} className="text-amber-500" />내 드라이브
-                (루트)
+                <Folder size={16} className="text-amber-500" />
+                {t('vaultModals.myDriveRoot')}
               </button>
               {allFolders.map((f) => {
                 const isCurrent = f.id === selectedFolderId;
@@ -165,7 +162,7 @@ export default function VaultModals({
                     disabled={disabled}
                     title={
                       isInSelection
-                        ? '선택한 폴더로 이동할 수 없습니다'
+                        ? t('vaultModals.cannotMoveToSelectedFolder')
                         : undefined
                     }
                     onClick={() => {
@@ -188,7 +185,7 @@ export default function VaultModals({
                   setBulkMoveItems(null);
                 }}
               >
-                취소
+                {t('common.cancel')}
               </button>
             </div>
           </div>

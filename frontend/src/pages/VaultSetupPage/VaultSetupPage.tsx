@@ -1,3 +1,4 @@
+import i18n from '@/i18n';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Check, Copy, FolderOpen } from 'lucide-react';
@@ -103,7 +104,7 @@ export default function VaultSetupPage({ onComplete }: VaultSetupPageProps) {
         directory: true,
         multiple: false,
         defaultPath: vaultPath || undefined,
-        title: '금고 저장 위치 선택',
+        title: i18n.t('setup.selectLocationTitle'),
       });
       if (selected) setVaultPath(selected);
     } catch {
@@ -125,8 +126,10 @@ export default function VaultSetupPage({ onComplete }: VaultSetupPageProps) {
       const freeGB = freeBytes / (1024 * 1024 * 1024);
       if (freeGB < MIN_FREE_GB) {
         setError(
-          `선택한 드라이브의 여유 공간이 ${freeGB.toFixed(1)}GB입니다. ` +
-            `${MIN_FREE_GB}GB 이상 필요합니다.`,
+          i18n.t('setupErrors.lowDiskSpace', {
+            free: freeGB.toFixed(1),
+            min: MIN_FREE_GB,
+          }),
         );
         return;
       }
@@ -141,11 +144,11 @@ export default function VaultSetupPage({ onComplete }: VaultSetupPageProps) {
     e.preventDefault();
     setError('');
     if (password.length < 6) {
-      setError('비밀번호는 6자 이상이어야 합니다.');
+      setError(i18n.t('setupErrors.minPassword'));
       return;
     }
     if (password !== confirmPassword) {
-      setError('비밀번호가 일치하지 않습니다.');
+      setError(i18n.t('setupErrors.passwordMismatch'));
       return;
     }
 
@@ -207,22 +210,23 @@ export default function VaultSetupPage({ onComplete }: VaultSetupPageProps) {
               StealthVault
             </h1>
             <p className="mt-2 text-slate-400 text-sm">
-              금고를 저장할 위치를 선택하세요
+              {i18n.t('setup.selectLocation')}
             </p>
           </div>
 
           <div className="rounded-lg border border-amber-500/50 bg-amber-500/10 p-4">
             <p className="text-amber-400 text-sm font-medium">
-              ⚠️ 한번 생성 후에는 저장 위치를 변경할 수 없습니다.
+              ⚠️ {i18n.t('setup.locationWarning')}
             </p>
             <p className="mt-1 text-amber-300/80 text-xs">
-              기본값은 C 드라이브입니다. 다른 드라이브(D:, E: 등)를 선택할 수도
-              있습니다.
+              {i18n.t('setup.locationHint')}
             </p>
           </div>
 
           <div className="space-y-2">
-            <label className="text-sm text-slate-400">저장 경로</label>
+            <label className="text-sm text-slate-400">
+              {i18n.t('setup.storagePath')}
+            </label>
             {error && <p className="text-sm text-rose-400">{error}</p>}
             <div className="flex gap-2">
               <input
@@ -238,10 +242,10 @@ export default function VaultSetupPage({ onComplete }: VaultSetupPageProps) {
                   type="button"
                   onClick={handleBrowseFolder}
                   className="flex items-center gap-2 px-4 py-3 rounded-lg bg-slate-700 hover:bg-slate-600 text-white"
-                  title="폴더 찾아보기"
+                  title={i18n.t('setup.browseFolder')}
                 >
                   <FolderOpen size={18} />
-                  찾아보기
+                  {i18n.t('setup.browse')}
                 </button>
               )}
             </div>
@@ -252,7 +256,7 @@ export default function VaultSetupPage({ onComplete }: VaultSetupPageProps) {
             onClick={handleLocationNext}
             className="w-full py-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium"
           >
-            다음
+            {i18n.t('common.next')}
           </button>
         </div>
       </div>
@@ -268,7 +272,7 @@ export default function VaultSetupPage({ onComplete }: VaultSetupPageProps) {
               StealthVault
             </h1>
             <p className="mt-2 text-slate-400 text-sm">
-              처음 사용하시는군요. 비밀번호를 설정해주세요
+              {i18n.t('setup.firstTime')}
             </p>
           </div>
 
@@ -277,7 +281,7 @@ export default function VaultSetupPage({ onComplete }: VaultSetupPageProps) {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="비밀번호 (6자 이상)"
+              placeholder={i18n.t('setup.passwordPlaceholder')}
               className="w-full px-4 py-3 rounded-lg bg-slate-800/80 border border-slate-600 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500"
               autoFocus
               disabled={loading}
@@ -286,7 +290,7 @@ export default function VaultSetupPage({ onComplete }: VaultSetupPageProps) {
               type="password"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
-              placeholder="비밀번호 확인"
+              placeholder={i18n.t('setup.passwordConfirm')}
               className="w-full px-4 py-3 rounded-lg bg-slate-800/80 border border-slate-600 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500"
               disabled={loading}
             />
@@ -296,7 +300,7 @@ export default function VaultSetupPage({ onComplete }: VaultSetupPageProps) {
               disabled={loading}
               className="w-full py-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium transition-colors disabled:opacity-50"
             >
-              {loading ? '설정 중...' : '다음'}
+              {loading ? i18n.t('setup.setting') : i18n.t('common.next')}
             </button>
           </form>
         </div>
@@ -310,13 +314,13 @@ export default function VaultSetupPage({ onComplete }: VaultSetupPageProps) {
         <div className="w-full max-w-md space-y-6">
           <div className="text-center">
             <h1 className="text-2xl font-bold text-white">
-              복구 키를 안전한 곳에 보관하세요
+              {i18n.t('setup.recoveryTitle')}
             </h1>
             <p className="mt-2 text-slate-400 text-sm">
-              비밀번호를 잊으시면 이 키로만 복구할 수 있습니다.
+              {i18n.t('setup.recoveryDesc')}
               <br />
               <strong className="text-amber-400">
-                이 화면은 다시 보여지지 않습니다.
+                {i18n.t('setup.recoveryWarning')}
               </strong>
             </p>
           </div>
@@ -332,25 +336,25 @@ export default function VaultSetupPage({ onComplete }: VaultSetupPageProps) {
             >
               {copied ? (
                 <>
-                  <Check size={16} /> 복사됨
+                  <Check size={16} /> {i18n.t('setup.copied')}
                 </>
               ) : (
                 <>
-                  <Copy size={16} /> 클립보드에 복사
+                  <Copy size={16} /> {i18n.t('setup.copyToClipboard')}
                 </>
               )}
             </button>
           </div>
 
           <p className="text-center text-slate-500 text-xs">
-            우리는 이 키를 저장하지 않습니다. 분실 시 복구가 불가능합니다.
+            {i18n.t('setup.keyNotStored')}
           </p>
 
           <button
             onClick={handleToTerms}
             className="w-full py-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium"
           >
-            복구 키를 저장했습니다
+            {i18n.t('setup.savedRecovery')}
           </button>
         </div>
       </div>
@@ -363,10 +367,10 @@ export default function VaultSetupPage({ onComplete }: VaultSetupPageProps) {
         <div className="w-full max-w-2xl mx-auto flex flex-col flex-1 min-h-0">
           <div className="text-center mb-6">
             <h1 className="text-2xl font-bold text-white">
-              StealthVault 이용약관
+              {i18n.t('setup.termsTitle')}
             </h1>
             <p className="mt-1 text-slate-400 text-sm">
-              아래 약관에 동의해 주세요
+              {i18n.t('setup.termsSubtitle')}
             </p>
           </div>
 
@@ -384,7 +388,7 @@ export default function VaultSetupPage({ onComplete }: VaultSetupPageProps) {
               className="mt-1 rounded border-slate-600 bg-slate-800 text-emerald-600 focus:ring-emerald-500"
             />
             <span className="text-slate-300 text-sm">
-              위 이용약관에 동의합니다.
+              {i18n.t('setup.termsAgree')}
             </span>
           </label>
 
@@ -393,7 +397,7 @@ export default function VaultSetupPage({ onComplete }: VaultSetupPageProps) {
             disabled={!termsAgreed}
             className="w-full py-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            동의하고 금고 열기
+            {i18n.t('setup.agreeAndOpen')}
           </button>
         </div>
       </div>

@@ -7,8 +7,11 @@ type ColorTheme = 'blue' | 'green' | 'purple' | 'orange' | 'rose' | 'cyan';
 interface ThemeState {
   mode: ThemeMode;
   colorTheme: ColorTheme;
+  /** 배경 이미지 경로 (빈 문자열 = 없음). Tauri: convertFileSrc로 표시 */
+  backgroundImage: string;
   setMode: (mode: ThemeMode) => void;
   setColorTheme: (color: ColorTheme) => void;
+  setBackgroundImage: (path: string) => void;
   applyTheme: () => void;
 }
 
@@ -48,6 +51,7 @@ export const useThemeStore = create<ThemeState>()(
     (set, get) => ({
       mode: 'light',
       colorTheme: 'blue',
+      backgroundImage: '',
 
       setMode: (mode) => {
         set({ mode });
@@ -60,6 +64,8 @@ export const useThemeStore = create<ThemeState>()(
         const { mode } = get();
         applyThemeToDOM(mode, colorTheme);
       },
+
+      setBackgroundImage: (backgroundImage) => set({ backgroundImage }),
 
       applyTheme: () => {
         const { mode, colorTheme } = get();

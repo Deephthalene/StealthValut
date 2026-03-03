@@ -12,6 +12,7 @@ import {
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 interface VideoFile {
   id: string;
@@ -41,6 +42,7 @@ function fmt(sec: number): string {
 const IDLE_MS = 2500;
 
 export default function VideoPlayer({ file, videos, onClose }: Props) {
+  const { t } = useTranslation();
   const [cur, setCur] = useState(file);
   const [loading, setLoading] = useState(true);
   const [playing, setPlaying] = useState(false);
@@ -210,7 +212,7 @@ export default function VideoPlayer({ file, videos, onClose }: Props) {
     const v = videoRef.current;
     if (!v) return;
     if (v.paused) {
-      v.play().catch(() => setLoadError('재생할 수 없습니다.'));
+      v.play().catch(() => setLoadError(t('video.playError')));
     } else {
       v.pause();
     }

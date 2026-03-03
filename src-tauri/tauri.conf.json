@@ -23,6 +23,12 @@
         "minHeight": 550
       }
     ],
-    "security": { "csp": null }
+    "security": {
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["**/*"]
+      }
+    }
   }
 }

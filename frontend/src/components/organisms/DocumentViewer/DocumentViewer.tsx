@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { Loader2, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 interface DocFile {
   id: string;
@@ -71,6 +72,7 @@ function detectType(name: string): DocType {
 }
 
 export default function DocumentViewer({ file, onClose }: Props) {
+  const { t } = useTranslation();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [scale, setScale] = useState(1);
@@ -105,14 +107,14 @@ export default function DocumentViewer({ file, onClose }: Props) {
           renderText(el, binary);
           break;
         default:
-          setError('지원하지 않는 파일 형식입니다.');
+          setError(t('document.unsupportedFormat'));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
-  }, [file.id, docType]);
+  }, [file.id, docType, t]);
 
   useEffect(() => {
     loadDocument();

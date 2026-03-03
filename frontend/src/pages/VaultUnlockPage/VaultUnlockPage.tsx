@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 interface VaultUnlockPageProps {
   onUnlock: () => void;
@@ -16,6 +17,7 @@ export default function VaultUnlockPage({
   onUnlock,
   onReset,
 }: VaultUnlockPageProps) {
+  const { t } = useTranslation();
   const [mode, setMode] = useState<'password' | 'recovery' | 'reset-password'>(
     'password',
   );
@@ -35,8 +37,8 @@ export default function VaultUnlockPage({
     if (!value) {
       setError(
         mode === 'password'
-          ? '비밀번호를 입력하세요.'
-          : '복구 키를 입력하세요.',
+          ? t('setupErrors.enterPassword')
+          : t('setupErrors.enterRecoveryKey'),
       );
       return;
     }
@@ -50,7 +52,7 @@ export default function VaultUnlockPage({
             await invoke('vault_cache_key', { password: value });
             onUnlock();
           } else {
-            setError('비밀번호가 올바르지 않습니다.');
+            setError(t('setupErrors.wrongPassword'));
           }
         } else {
           const ok = await invoke<boolean>('vault_verify_recovery_key', {
@@ -59,7 +61,7 @@ export default function VaultUnlockPage({
           if (ok) {
             setMode('reset-password');
           } else {
-            setError('복구 키가 올바르지 않습니다.');
+            setError(t('setupErrors.wrongRecoveryKey'));
           }
         }
       } else {
@@ -76,11 +78,11 @@ export default function VaultUnlockPage({
     e.preventDefault();
     setError('');
     if (newPassword.length < 6) {
-      setError('비밀번호는 6자 이상이어야 합니다.');
+      setError(t('setupErrors.minPassword'));
       return;
     }
     if (newPassword !== confirmNewPassword) {
-      setError('비밀번호가 일치하지 않습니다.');
+      setError(t('setupErrors.passwordMismatch'));
       return;
     }
 
@@ -125,10 +127,10 @@ export default function VaultUnlockPage({
           </h1>
           <p className="mt-2 text-slate-400 text-sm">
             {mode === 'password'
-              ? '비밀번호를 입력하여 금고를 열어주세요'
+              ? t('unlock.passwordPrompt')
               : mode === 'recovery'
-                ? '복구 키를 입력하여 비밀번호를 재설정하세요'
-                : '새 비밀번호를 설정해주세요'}
+                ? t('unlock.recoveryPrompt')
+                : t('unlock.newPasswordPrompt')}
           </p>
         </div>
 
@@ -139,7 +141,7 @@ export default function VaultUnlockPage({
                 type="password"
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="새 비밀번호 (6자 이상)"
+                placeholder={t('unlock.newPassword')}
                 className="w-full px-4 py-3 rounded-lg bg-slate-800/80 border border-slate-600 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500"
                 autoFocus
                 disabled={loading}
@@ -148,7 +150,7 @@ export default function VaultUnlockPage({
                 type="password"
                 value={confirmNewPassword}
                 onChange={(e) => setConfirmNewPassword(e.target.value)}
-                placeholder="비밀번호 확인"
+                placeholder={t('setup.passwordConfirm')}
                 className="w-full px-4 py-3 rounded-lg bg-slate-800/80 border border-slate-600 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500"
                 disabled={loading}
               />
@@ -159,7 +161,7 @@ export default function VaultUnlockPage({
               disabled={loading}
               className="w-full py-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium transition-colors disabled:opacity-50"
             >
-              {loading ? '설정 중...' : '새 비밀번호로 변경하고 금고 열기'}
+              {loading ? t('setup.setting') : t('unlock.resetWithNew')}
             </button>
           </form>
         ) : (
@@ -170,7 +172,7 @@ export default function VaultUnlockPage({
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="비밀번호"
+                  placeholder={t('unlock.password')}
                   className="w-full px-4 py-3 rounded-lg bg-slate-800/80 border border-slate-600 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500"
                   autoFocus
                   disabled={loading}
@@ -180,7 +182,7 @@ export default function VaultUnlockPage({
                   type="text"
                   value={recoveryKey}
                   onChange={(e) => setRecoveryKey(e.target.value)}
-                  placeholder="복구 키"
+                  placeholder={t('unlock.recoveryKey')}
                   className="w-full px-4 py-3 rounded-lg bg-slate-800/80 border border-slate-600 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 font-mono text-sm"
                   autoFocus
                   disabled={loading}
@@ -194,10 +196,10 @@ export default function VaultUnlockPage({
               className="w-full py-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium transition-colors disabled:opacity-50"
             >
               {loading
-                ? '확인 중...'
+                ? t('unlock.verifying')
                 : mode === 'recovery'
-                  ? '다음'
-                  : '금고 열기'}
+                  ? t('common.next')
+                  : t('unlock.openVault')}
             </button>
           </form>
         )}
@@ -214,7 +216,7 @@ export default function VaultUnlockPage({
               }}
               className="text-slate-400 hover:text-slate-300 text-sm underline"
             >
-              복구 키 입력으로 돌아가기
+              {t('unlock.backToRecovery')}
             </button>
           ) : (
             <button
@@ -226,8 +228,8 @@ export default function VaultUnlockPage({
               className="text-slate-400 hover:text-slate-300 text-sm underline"
             >
               {mode === 'password'
-                ? '비밀번호를 잊으셨나요? 복구 키로 비밀번호 재설정'
-                : '비밀번호로 열기'}
+                ? t('unlock.forgotPassword')
+                : t('unlock.usePassword')}
             </button>
           )}
 
@@ -239,7 +241,7 @@ export default function VaultUnlockPage({
                 disabled={loading}
                 className="text-amber-500/80 hover:text-amber-400 text-xs underline"
               >
-                개발: 금고 초기화 (신규 생성 다시 보기)
+                {t('unlock.devReset')}
               </button>
             </div>
           )}

@@ -7,12 +7,14 @@ import {
   VAULT_FILES_CHANGED,
 } from '@/components/organisms/SidebarStorage/SidebarStorage';
 import VideoPlayer from '@/components/organisms/VideoPlayer/VideoPlayer';
+import i18n from '@/i18n';
 import { useVaultFolderStore } from '@/stores/useVaultFolderStore';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { FileIcon, Folder } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import VaultContentGrid from './VaultContentGrid';
 import VaultEmptyState from './VaultEmptyState';
@@ -26,6 +28,7 @@ function isTauriEnv(): boolean {
 }
 
 function VaultPage() {
+  const { t } = useTranslation();
   const { selectedFolderId, setSelectedFolderId: rawSetFolder } =
     useVaultFolderStore();
 
@@ -179,7 +182,7 @@ function VaultPage() {
     else if (file.file_kind === 'audio') setAudioFile(file);
     else if (file.file_kind === 'video') setVideoFile(file);
     else if (file.file_kind === 'document') setDocFile(file);
-    else toast.info('지원하지 않는 형식의 파일입니다.');
+    else toast.info(t('vault.unsupportedFormat'));
   };
 
   const handleFolderClick = (
@@ -243,7 +246,7 @@ function VaultPage() {
       for (const id of folderIds) {
         await invoke('delete_folder', { id });
       }
-      toast.success(`${totalSelected}개 항목이 삭제되었습니다`);
+      toast.success(t('vault.itemsDeleted', { count: totalSelected }));
       setSelectedFileIds(new Set());
       setSelectedFolderIds(new Set());
       await load();
@@ -298,7 +301,7 @@ function VaultPage() {
     setExportProgress(null);
     setUploading(false);
     if (ok > 0) {
-      toast.success(`${ok}개 항목 내보내기 완료`);
+      toast.success(t('vault.itemsExportDone', { count: ok }));
       setSelectedFileIds(new Set());
       setSelectedFolderIds(new Set());
       await load();
@@ -481,9 +484,17 @@ function VaultPage() {
                     : String(errors[0])
                   : '',
               );
-              if (showError)
-                toast.error(errors[0]?.toString?.() ?? '업로드 실패');
-              if (showSuccess) toast.success(`${ok}개 항목 업로드 완료`);
+              if (showError) {
+                const errMsg =
+                  errors[0] instanceof Error
+                    ? errors[0].message
+                    : errors[0] != null
+                      ? String(errors[0])
+                      : i18n.t('vault.uploadFailed');
+                toast.error(errMsg);
+              }
+              if (showSuccess)
+                toast.success(i18n.t('vault.itemsUploadDone', { count: ok }));
             })
             .finally(() => {
               load().then(dispatchVaultFilesChanged);
@@ -522,7 +533,7 @@ function VaultPage() {
       const selected = await open({
         multiple: true,
         directory: false,
-        title: '이동할 파일 선택 (원본은 삭제됩니다)',
+        title: t('vault.selectFilesToMove'),
       });
       if (!selected) return;
       const paths = Array.isArray(selected) ? selected : [selected];
@@ -539,7 +550,7 @@ function VaultPage() {
         done += 1;
         setUploadProgress({ current: done, total: paths.length });
       }
-      toast.success(`${paths.length}개 파일 업로드 완료`);
+      toast.success(t('vault.filesUploadDone', { count: paths.length }));
       await load();
       dispatchVaultFilesChanged();
     } catch (err) {
@@ -558,7 +569,7 @@ function VaultPage() {
       const selected = await open({
         multiple: false,
         directory: true,
-        title: '이동할 폴더 선택 (원본은 삭제됩니다)',
+        title: t('vault.selectFolderToMove'),
       });
       if (!selected) return;
       const folderPath = Array.isArray(selected) ? selected[0] : selected;
@@ -573,9 +584,7 @@ function VaultPage() {
           folderId,
         },
       );
-      toast.success(
-        `폴더 업로드 완료 (폴더 ${folderCount}개, 파일 ${fileCount}개)`,
-      );
+      toast.success(t('vault.folderUploadDone', { folderCount, fileCount }));
       await load();
       dispatchVaultFilesChanged();
     } catch (err) {
@@ -615,7 +624,7 @@ function VaultPage() {
     setUploadError('');
     try {
       const dest = await save({
-        title: '내보낼 위치 선택 (금고에서 삭제됩니다)',
+        title: t('vault.selectExportDest'),
         defaultPath: file.original_name,
       });
       if (!dest) {
@@ -627,7 +636,7 @@ function VaultPage() {
         fileId: file.id,
         destPath: dest,
       });
-      toast.success('내보내기 완료');
+      toast.success(t('vault.exportDone'));
       await load();
       dispatchVaultFilesChanged();
     } catch (err) {
@@ -694,7 +703,7 @@ function VaultPage() {
           }
         }
         if (ok > 0) {
-          toast.success(`${ok}개 항목을 이동했습니다`);
+          toast.success(t('vault.itemsMoved', { count: ok }));
           setSelectedFileIds(new Set());
           setSelectedFolderIds(new Set());
           await load();
@@ -704,7 +713,7 @@ function VaultPage() {
         toast.error(err instanceof Error ? err.message : String(err));
       }
     },
-    [load],
+    [load, t],
   );
 
   const onInternalPointerDown = useCallback(
@@ -809,7 +818,7 @@ function VaultPage() {
   const handleDeleteFile = async (fileId: string) => {
     try {
       await invoke('vault_delete_file', { fileId });
-      toast.success('파일이 삭제되었습니다');
+      toast.success(t('vault.fileDeleted'));
       await load();
       dispatchVaultFilesChanged();
     } catch (err) {
@@ -820,7 +829,7 @@ function VaultPage() {
   const handleDeleteFolder = async (folderId: string) => {
     try {
       await invoke('delete_folder', { id: folderId });
-      toast.success('폴더가 삭제되었습니다');
+      toast.success(t('vault.folderDeleted'));
       await load();
       dispatchVaultFilesChanged();
     } catch (err) {
@@ -838,7 +847,7 @@ function VaultPage() {
         fileId: renamingFileId,
         newName: renameValue.trim(),
       });
-      toast.success('이름이 변경되었습니다');
+      toast.success(t('vault.nameChanged'));
       await load();
       dispatchVaultFilesChanged();
     } catch (err) {
@@ -858,7 +867,7 @@ function VaultPage() {
         id: renamingFolderId,
         newName: renameValue.trim(),
       });
-      toast.success('폴더 이름이 변경되었습니다');
+      toast.success(t('vault.folderNameChanged'));
       await load();
       dispatchVaultFilesChanged();
     } catch (err) {
@@ -875,7 +884,7 @@ function VaultPage() {
         fileId: movingFile.id,
         folderId: targetFolderId || undefined,
       });
-      toast.success('파일이 이동되었습니다');
+      toast.success(t('vault.fileMoved'));
       setMovingFile(null);
       await load();
       dispatchVaultFilesChanged();
@@ -918,7 +927,7 @@ function VaultPage() {
       setBulkMoveItems(null);
       setSelectedFileIds(new Set());
       setSelectedFolderIds(new Set());
-      toast.success(`${ok}개 항목을 이동했습니다`);
+      toast.success(t('vault.itemsMoved', { count: ok }));
       await load();
       dispatchVaultFilesChanged();
     } catch (err) {
@@ -936,9 +945,7 @@ function VaultPage() {
           folderId: selectedFolderId || undefined,
         },
       );
-      toast.success(
-        `압축 해제 완료 (폴더 ${folderCount}개, 파일 ${fileCount}개)`,
-      );
+      toast.success(t('vault.extractDone', { folderCount, fileCount }));
       await load();
       dispatchVaultFilesChanged();
     } catch (err) {
@@ -979,7 +986,7 @@ function VaultPage() {
       const destFolder = await open({
         multiple: false,
         directory: true,
-        title: `"${folder.name}" 폴더를 내보낼 위치 선택 (금고에서 삭제됩니다)`,
+        title: t('vault.selectFolderExportDest', { name: folder.name }),
       });
       if (!destFolder) return;
       const dest = Array.isArray(destFolder) ? destFolder[0] : destFolder;
@@ -988,9 +995,7 @@ function VaultPage() {
         'vault_extract_folder',
         { folderId: folder.id, destPath: dest },
       );
-      toast.success(
-        `폴더 내보내기 완료 (폴더 ${folderCount}개, 파일 ${fileCount}개)`,
-      );
+      toast.success(t('vault.folderExportDone', { folderCount, fileCount }));
       await load();
       dispatchVaultFilesChanged();
     } catch (err) {
@@ -1033,7 +1038,7 @@ function VaultPage() {
       else if (file.file_kind === 'audio') setAudioFile(file);
       else if (file.file_kind === 'video') setVideoFile(file);
       else if (file.file_kind === 'document') setDocFile(file);
-      else toast.info('지원하지 않는 형식의 파일입니다.');
+      else toast.info(t('vault.unsupportedFormat'));
     },
     onExtractArchive: handleExtractArchive,
     onRename: (file: FileItem) => {
@@ -1114,7 +1119,7 @@ function VaultPage() {
               )}
             </div>
             <span className="text-sm font-medium text-foreground">
-              {internalDragState.count}개 항목 이동 중
+              {t('vault.itemsMoving', { count: internalDragState.count })}
             </span>
           </div>
         </div>

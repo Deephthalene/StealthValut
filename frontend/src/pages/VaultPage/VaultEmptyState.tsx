@@ -1,4 +1,5 @@
 import { Folder, Search } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 interface VaultEmptyStateProps {
   loading: boolean;
@@ -11,10 +12,11 @@ export default function VaultEmptyState({
   empty,
   searchQuery,
 }: VaultEmptyStateProps) {
+  const { t } = useTranslation();
   if (loading) {
     return (
       <div className="py-12 text-center text-muted-foreground text-sm">
-        로딩 중...
+        {t('vaultEmpty.loading')}
       </div>
     );
   }
@@ -25,18 +27,15 @@ export default function VaultEmptyState({
       {q ? (
         <>
           <Search size={40} className="mx-auto mb-2 opacity-50" />
-          <p>검색 결과가 없습니다</p>
+          <p>{t('vaultEmpty.noResults')}</p>
         </>
       ) : (
         <>
           <Folder size={40} className="mx-auto mb-2 opacity-50" />
-          <p>이 폴더가 비어 있습니다</p>
-          <p className="mt-1 text-xs">
-            새 폴더를 만들거나 파일·폴더를 끌어다 놓아 업로드하세요.
-          </p>
+          <p>{t('vaultEmpty.folderEmpty')}</p>
+          <p className="mt-1 text-xs">{t('vaultEmpty.emptyHint')}</p>
           <p className="mt-2 text-xs text-muted-foreground/80">
-            파일을 밖으로 끌어내기는 지원하지 않습니다. 내보내기는 우클릭 메뉴를
-            이용하세요.
+            {t('vaultEmpty.exportHint')}
           </p>
         </>
       )}

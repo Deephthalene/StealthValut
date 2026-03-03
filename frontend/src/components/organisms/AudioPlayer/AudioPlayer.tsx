@@ -12,6 +12,7 @@ import {
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 interface AudioFile {
   id: string;
@@ -43,6 +44,7 @@ export default function AudioPlayer({
   onClose,
   onFileChange,
 }: Props) {
+  const { t } = useTranslation();
   const audioRef = useRef<HTMLAudioElement>(null);
   const seekRef = useRef<HTMLDivElement>(null);
   const [playing, setPlaying] = useState(false);
@@ -209,7 +211,7 @@ export default function AudioPlayer({
       <audio
         ref={audioRef}
         preload="auto"
-        onError={() => setLoadError('오디오를 불러올 수 없습니다.')}
+        onError={() => setLoadError(t('audio.loadError'))}
       />
 
       {/* Playlist panel */}
@@ -432,7 +434,7 @@ export default function AudioPlayer({
                 ? 'bg-primary/10 text-primary'
                 : 'hover:bg-accent text-muted-foreground'
             }`}
-            title="재생목록"
+            title={t('audio.playlist')}
           >
             {showPlaylist ? <ChevronUp size={16} /> : <ListMusic size={16} />}
           </button>

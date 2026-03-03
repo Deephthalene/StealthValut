@@ -25,14 +25,14 @@ export const appRoutes: RouteItem[] = [
     name: 'Vault',
     component: VaultPage,
     icon: 'LayoutDashboard',
-    title: '금고',
+    title: 'nav.vault',
   },
   {
     path: 'settings',
     name: 'Settings',
     component: SettingsPage,
     icon: 'Settings',
-    title: '설정',
+    title: 'nav.settings',
   },
 ];
 

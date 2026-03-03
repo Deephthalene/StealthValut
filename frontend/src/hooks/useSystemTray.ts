@@ -1,3 +1,4 @@
+import i18n from '@/i18n';
 import { defaultWindowIcon } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
 import { Menu } from '@tauri-apps/api/menu';
@@ -18,13 +19,14 @@ export function useSystemTray() {
     (async () => {
       try {
         const icon = await defaultWindowIcon();
+        if (!icon) return;
         const win = getCurrentWindow();
 
         const menu = await Menu.new({
           items: [
             {
               id: 'show',
-              text: 'StealthVault 열기',
+              text: i18n.t('tray.open'),
               action: () => {
                 win.show();
                 win.setFocus();
@@ -32,7 +34,7 @@ export function useSystemTray() {
             },
             {
               id: 'quit',
-              text: '종료',
+              text: i18n.t('tray.quit'),
               action: () => {
                 invoke('app_exit');
               },

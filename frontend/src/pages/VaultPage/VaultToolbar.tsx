@@ -11,17 +11,13 @@ import {
   Upload,
 } from 'lucide-react';
 import { useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { FolderItem } from './types';
 
 export type SortKey = 'name' | 'date' | 'size' | 'kind';
 export type SortDir = 'asc' | 'desc';
 
-const SORT_OPTIONS: { key: SortKey; label: string }[] = [
-  { key: 'name', label: '이름' },
-  { key: 'date', label: '날짜' },
-  { key: 'size', label: '크기' },
-  { key: 'kind', label: '종류' },
-];
+const SORT_KEYS: SortKey[] = ['name', 'date', 'size', 'kind'];
 
 interface VaultToolbarProps {
   breadcrumb: FolderItem[];
@@ -53,6 +49,7 @@ interface VaultToolbarProps {
 }
 
 export default function VaultToolbar(props: VaultToolbarProps) {
+  const { t } = useTranslation();
   const {
     breadcrumb,
     onNavigate,
@@ -98,10 +95,11 @@ export default function VaultToolbar(props: VaultToolbarProps) {
       {totalSelected > 0 && (
         <div className="flex-shrink-0 mb-3 flex items-center gap-3 px-4 py-2.5 rounded-lg bg-primary/5 border border-primary/20">
           <span className="text-sm font-medium">
-            {totalSelected}개 선택됨
+            {t('vault.selectedCount', { count: totalSelected })}
             {selectedFolderCount > 0 && selectedFileCount > 0 && (
               <span className="text-muted-foreground ml-1 text-xs">
-                (폴더 {selectedFolderCount}, 파일 {selectedFileCount})
+                ({t('vault.folderCount', { count: selectedFolderCount })},{' '}
+                {t('vault.fileCount', { count: selectedFileCount })})
               </span>
             )}
           </span>
@@ -112,7 +110,7 @@ export default function VaultToolbar(props: VaultToolbarProps) {
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border border-border hover:bg-accent"
           >
             <ArrowDownToLine size={14} />
-            이동
+            {t('vault.move')}
           </button>
           <button
             type="button"
@@ -120,7 +118,7 @@ export default function VaultToolbar(props: VaultToolbarProps) {
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border border-border hover:bg-accent"
           >
             <ArrowUpFromLine size={14} />
-            내보내기
+            {t('vault.export')}
           </button>
           <button
             type="button"
@@ -128,14 +126,14 @@ export default function VaultToolbar(props: VaultToolbarProps) {
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm bg-rose-600 text-white hover:bg-rose-700"
           >
             <Trash2 size={14} />
-            삭제
+            {t('common.delete')}
           </button>
           <button
             type="button"
             onClick={onClearSelection}
             className="text-sm text-muted-foreground hover:text-foreground"
           >
-            선택 해제
+            {t('vault.clearSelection')}
           </button>
         </div>
       )}
@@ -147,7 +145,7 @@ export default function VaultToolbar(props: VaultToolbarProps) {
             className="hover:text-foreground shrink-0"
             onClick={() => onNavigate(null)}
           >
-            내 드라이브
+            {t('nav.myDrive')}
           </button>
           {breadcrumb.map((f) => (
             <span key={f.id} className="flex items-center gap-1 min-w-0">
@@ -172,7 +170,8 @@ export default function VaultToolbar(props: VaultToolbarProps) {
             className="flex items-center gap-2 px-3 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:opacity-90"
             onClick={() => setCreating(true)}
           >
-            <FolderPlus size={16} />새 폴더
+            <FolderPlus size={16} />
+            {t('vault.newFolder')}
           </button>
           <button
             type="button"
@@ -184,12 +183,12 @@ export default function VaultToolbar(props: VaultToolbarProps) {
             {uploading ? (
               <>
                 <Loader2 size={16} className="animate-spin" />
-                업로드 중...
+                {t('vault.uploading')}
               </>
             ) : (
               <>
                 <Upload size={16} />
-                파일 업로드
+                {t('vault.uploadFile')}
               </>
             )}
           </button>
@@ -200,10 +199,10 @@ export default function VaultToolbar(props: VaultToolbarProps) {
             className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border text-sm hover:bg-accent disabled:opacity-50"
           >
             <FolderInput size={16} />
-            폴더 업로드
+            {t('vault.uploadFolder')}
           </button>
           <span className="text-xs text-foreground/80 ml-2 px-2 py-1 rounded bg-muted/60">
-            내보내기: 우클릭 메뉴 사용 (끌어내기 미지원)
+            {t('vault.exportHint')}
           </span>
           <div className="flex-1" />
           <div className="relative">
@@ -215,7 +214,7 @@ export default function VaultToolbar(props: VaultToolbarProps) {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="검색..."
+              placeholder={t('vault.search')}
               className="w-44 py-1.5 pl-8 pr-3 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary"
             />
           </div>
@@ -226,29 +225,29 @@ export default function VaultToolbar(props: VaultToolbarProps) {
               className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-border text-sm hover:bg-accent"
             >
               <ArrowDownAZ size={14} />
-              {SORT_OPTIONS.find((o) => o.key === sortKey)?.label}
+              {t(`vault.${sortKey}`)}
             </button>
             {showSortMenu && (
               <div className="absolute right-0 top-full mt-1 z-50 min-w-[140px] py-1 rounded-lg bg-popover border border-border shadow-xl">
-                {SORT_OPTIONS.map((opt) => (
+                {SORT_KEYS.map((opt) => (
                   <button
-                    key={opt.key}
+                    key={opt}
                     type="button"
                     className={`w-full px-3 py-1.5 text-sm text-left hover:bg-accent flex items-center justify-between ${
-                      sortKey === opt.key ? 'font-medium text-primary' : ''
+                      sortKey === opt ? 'font-medium text-primary' : ''
                     }`}
                     onClick={() => {
-                      if (sortKey === opt.key) {
+                      if (sortKey === opt) {
                         setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
                       } else {
-                        setSortKey(opt.key);
+                        setSortKey(opt);
                         setSortDir('asc');
                       }
                       setShowSortMenu(false);
                     }}
                   >
-                    {opt.label}
-                    {sortKey === opt.key && (
+                    {t(`vault.${opt}`)}
+                    {sortKey === opt && (
                       <span className="text-xs opacity-60">
                         {sortDir === 'asc' ? '↑' : '↓'}
                       </span>
@@ -268,7 +267,7 @@ export default function VaultToolbar(props: VaultToolbarProps) {
             type="text"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
-            placeholder="폴더 이름"
+            placeholder={t('vault.folderName')}
             className="flex-1 py-1.5 px-2 rounded border border-input bg-background text-sm"
             autoFocus
             onKeyDown={(e) => {
@@ -284,7 +283,7 @@ export default function VaultToolbar(props: VaultToolbarProps) {
             className="px-3 py-1 rounded bg-primary text-primary-foreground text-sm"
             onClick={onCreateFolder}
           >
-            만들기
+            {t('vault.create')}
           </button>
         </div>
       )}

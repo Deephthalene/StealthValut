@@ -1,4 +1,5 @@
 import { useAutoLock } from '@/hooks/useAutoLock';
+import i18n from '@/i18n';
 import VaultSetupPage from '@/pages/VaultSetupPage/VaultSetupPage';
 import VaultUnlockPage from '@/pages/VaultUnlockPage/VaultUnlockPage';
 import { useVaultStore } from '@/stores/useVaultStore';
@@ -21,7 +22,9 @@ class VaultErrorBoundary extends Component<
     if (this.state.error) {
       return (
         <div className="min-h-dvh flex flex-col items-center justify-center bg-slate-900 gap-4">
-          <p className="text-rose-400 text-sm">오류가 발생했습니다.</p>
+          <p className="text-rose-400 text-sm">
+            {i18n.t('gate.errorOccurred')}
+          </p>
           <p className="text-slate-500 text-xs max-w-md text-center">
             {this.state.error.message}
           </p>
@@ -32,7 +35,7 @@ class VaultErrorBoundary extends Component<
             }}
             className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm"
           >
-            다시 시도
+            {i18n.t('gate.retry')}
           </button>
         </div>
       );
@@ -73,7 +76,9 @@ export default function VaultGate({ children }: VaultGateProps) {
   if (loading) {
     return (
       <div className="min-h-dvh flex items-center justify-center bg-slate-900">
-        <div className="animate-pulse text-slate-400">로딩 중...</div>
+        <div className="animate-pulse text-slate-400">
+          {i18n.t('gate.loading')}
+        </div>
       </div>
     );
   }

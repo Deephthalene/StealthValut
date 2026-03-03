@@ -13,6 +13,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 interface FolderItem {
   id: string;
@@ -34,6 +35,7 @@ export default function SidebarFolderTree({
   selectedFolderId,
   onSelectFolder,
 }: SidebarFolderTreeProps) {
+  const { t } = useTranslation();
   const [folders, setFolders] = useState<FolderItem[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
@@ -124,13 +126,13 @@ export default function SidebarFolderTree({
 
   const handleDelete = (id: string) => {
     const folder = folders.find((f) => f.id === id);
-    const name = folder?.name ?? '이 폴더';
+    const name = folder?.name ?? t('sidebar.thisFolder');
     setMenuOpen(null);
     alertDialog.custom({
-      title: '삭제 확인',
-      description: `${name}과(와) 하위 항목을 모두 삭제하시겠습니까?`,
-      confirmText: '삭제',
-      cancelText: '취소',
+      title: t('sidebar.deleteConfirmTitle'),
+      description: t('sidebar.deleteConfirmDesc', { name }),
+      confirmText: t('common.delete'),
+      cancelText: t('common.cancel'),
       showCancel: true,
       confirmVariant: 'destructive',
       onConfirm: async () => {
@@ -228,7 +230,7 @@ export default function SidebarFolderTree({
               <button
                 type="button"
                 className="p-1 rounded hover:bg-background/20"
-                title="새 하위 폴더"
+                title={t('sidebar.addSubfolder')}
                 onClick={(e) => {
                   e.stopPropagation();
                   setCreating(item.id);
@@ -263,7 +265,7 @@ export default function SidebarFolderTree({
                 type="text"
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
-                placeholder="폴더 이름"
+                placeholder={t('vault.folderName')}
                 className="flex-1 text-sm py-0.5 px-1.5 rounded border border-input bg-background"
                 autoFocus
                 onKeyDown={(e) => {
@@ -287,11 +289,13 @@ export default function SidebarFolderTree({
   return (
     <div className="flex-1 min-h-0 overflow-y-auto py-2">
       <div className="px-2 flex items-center justify-between mb-1">
-        <span className="text-xs font-medium text-muted-foreground">폴더</span>
+        <span className="text-xs font-medium text-muted-foreground">
+          {t('sidebar.folders')}
+        </span>
         <button
           type="button"
           className="p-1 rounded hover:bg-accent"
-          title="새 폴더"
+          title={t('sidebar.addFolder')}
           onClick={() => setCreating('root')}
         >
           <FolderPlus size={14} />
@@ -304,7 +308,7 @@ export default function SidebarFolderTree({
             type="text"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
-            placeholder="폴더 이름"
+            placeholder={t('vault.folderName')}
             className="w-full text-sm py-1 px-2 rounded border border-input bg-background"
             autoFocus
             onKeyDown={(e) => {
@@ -327,15 +331,15 @@ export default function SidebarFolderTree({
         onClick={() => onSelectFolder(null)}
       >
         <Folder size={14} className="flex-shrink-0 text-muted-foreground" />
-        <span className="flex-1 truncate">내 드라이브</span>
+        <span className="flex-1 truncate">{t('nav.myDrive')}</span>
       </div>
       {loading ? (
         <div className="px-4 py-2 text-xs text-muted-foreground">
-          로딩 중...
+          {t('common.loading')}
         </div>
       ) : rootChildren.length === 0 && creating !== 'root' ? (
         <div className="px-4 py-2 text-xs text-muted-foreground">
-          폴더가 없습니다. + 버튼으로 추가하세요.
+          {t('sidebar.noFolders')}
         </div>
       ) : (
         renderNode(rootChildren)
@@ -357,7 +361,7 @@ export default function SidebarFolderTree({
               setRenaming(menuFolder.id);
             }}
           >
-            <Pencil size={12} /> 이름 변경
+            <Pencil size={12} /> {t('vault.rename')}
           </button>
           <button
             type="button"
@@ -367,7 +371,7 @@ export default function SidebarFolderTree({
               handleDelete(menuFolder.id);
             }}
           >
-            <Trash2 size={12} /> 삭제
+            <Trash2 size={12} /> {t('common.delete')}
           </button>
         </div>
       )}
