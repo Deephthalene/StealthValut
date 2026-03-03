@@ -22,7 +22,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # --- Tauri (데스크톱 앱 프레임워크) ---
-tauri = { version = "2", features = [] }        # 핵심: React UI를 네이티브 창에 띄움
+tauri = { version = "2", features = ["tray-icon"] }  # 핵심: React UI + 트레이
 tauri-plugin-fs = "2"                           # 파일 시스템 접근 (나중에 파일 입출고용)
 tauri-plugin-dialog = "2"                       # 파일 선택 다이얼로그
 tauri-plugin-shell = "2"                        # 외부 프로그램 실행 (나중에 파일 열기용)

@@ -265,6 +265,12 @@ fn parse_file_path(s: &str) -> PathBuf {
     }
 }
 
+/// 앱 종료 (트레이 메뉴 '종료'용)
+#[tauri::command]
+fn app_exit() {
+    std::process::exit(0);
+}
+
 /// 무료 플랜 용량 초과 여부 확인
 fn check_free_tier_quota(base: &std::path::Path) -> Result<(), String> {
     let is_premium = license::load_license(base).ok().flatten().is_some();
@@ -562,6 +568,12 @@ fn handle_stream_request(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let _ = window.hide();
+                api.prevent_close();
+            }
+        })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_drag::init())
@@ -580,6 +592,7 @@ pub fn run() {
             });
         })
         .invoke_handler(tauri::generate_handler![
+            app_exit,
             check_quota,
             get_vault_path,
             get_default_vault_path,

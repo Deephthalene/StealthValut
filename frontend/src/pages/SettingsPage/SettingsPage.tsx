@@ -5,15 +5,38 @@ import {
   Crown,
   FolderOpen,
   Keyboard,
-  Lock,
   Loader2,
+  Lock,
   Timer,
 } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 function isTauriEnv(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+}
+
+const MODIFIER_ORDER = ['Ctrl', 'Shift', 'Alt'];
+
+function formatChord(keys: Set<string>): string {
+  const mods = MODIFIER_ORDER.filter((m) => keys.has(m));
+  const rest = [...keys].filter((k) => !MODIFIER_ORDER.includes(k));
+  rest.sort((a, b) => a.localeCompare(b));
+  return [...mods, ...rest].join('+');
+}
+
+function keyToPart(e: KeyboardEvent): string | null {
+  const key = e.key;
+  if (key === 'Control') return 'Ctrl';
+  if (key === 'Shift') return 'Shift';
+  if (key === 'Alt') return 'Alt';
+  if (['Meta', 'OS', 'Win'].includes(key)) return null;
+  return key.length === 1 ? key.toUpperCase() : key;
+}
+
+/** 2~3개 키 조합만 유효 */
+function isValidChord(parts: Set<string>): boolean {
+  return parts.size >= 2 && parts.size <= 3;
 }
 
 function HotkeyInput({
@@ -24,21 +47,26 @@ function HotkeyInput({
   onChange: (v: string) => void;
 }) {
   const [recording, setRecording] = useState(false);
+  const keysPressedRef = useRef<Set<string>>(new Set());
 
-  const handleKeyDown = useCallback(
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    const part = keyToPart(e);
+    if (!part) return;
+    e.preventDefault();
+    keysPressedRef.current.add(part);
+  }, []);
+
+  const handleKeyUp = useCallback(
     (e: KeyboardEvent) => {
+      const part = keyToPart(e);
+      if (!part) return;
       e.preventDefault();
-      const parts: string[] = [];
-      if (e.ctrlKey) parts.push('Ctrl');
-      if (e.shiftKey) parts.push('Shift');
-      if (e.altKey) parts.push('Alt');
-      const key = e.key;
-      if (!['Control', 'Shift', 'Alt', 'Meta'].includes(key)) {
-        parts.push(key.length === 1 ? key.toUpperCase() : key);
-      }
-      if (parts.length >= 2) {
-        onChange(parts.join('+'));
+      const before = new Set(keysPressedRef.current);
+      keysPressedRef.current.delete(part);
+      if (isValidChord(before)) {
+        onChange(formatChord(before));
         setRecording(false);
+        keysPressedRef.current.clear();
       }
     },
     [onChange],
@@ -46,12 +74,18 @@ function HotkeyInput({
 
   useEffect(() => {
     if (!recording) return;
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [recording, handleKeyDown]);
+    keysPressedRef.current.clear();
+    window.addEventListener('keydown', handleKeyDown, { capture: true });
+    window.addEventListener('keyup', handleKeyUp, { capture: true });
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, { capture: true });
+      window.removeEventListener('keyup', handleKeyUp, { capture: true });
+    };
+  }, [recording, handleKeyDown, handleKeyUp]);
 
   return (
     <button
+      type="button"
       onClick={() => setRecording(!recording)}
       className={`px-3 py-1.5 rounded-lg text-xs font-mono border transition-colors min-w-[120px] text-center ${
         recording
@@ -247,7 +281,7 @@ export default function SettingsPage() {
       <div className="flex items-center justify-between px-6 py-4">
         <span className="flex items-center gap-2 text-sm">
           <Keyboard size={15} className="text-muted-foreground" />
-          잠금 단축키
+          잠금 단축키 (2~3개 키 조합)
         </span>
         <HotkeyInput value={lockHotkey} onChange={setLockHotkey} />
       </div>

@@ -63,32 +63,61 @@ export function useAutoLock() {
     };
   }, [isUnlocked, resetTimer, timeoutMs, lock]);
 
-  // 잠금 단축키 → 잠금 + 창 최소화(트레이)
+  // 잠금 단축키 (2~3개 키 조합 1개) → 잠금 + 창 트레이로 숨김 (Panic 동작)
   useEffect(() => {
-    if (!isUnlocked || !lockHotkey) return;
+    const hotkey = lockHotkey?.trim();
+    if (!isUnlocked || !hotkey) return;
 
-    const parts = lockHotkey.toLowerCase().split('+');
-    const handler = (e: KeyboardEvent) => {
-      const ctrl = parts.includes('ctrl') === e.ctrlKey;
-      const shift = parts.includes('shift') === e.shiftKey;
-      const alt = parts.includes('alt') === e.altKey;
-      const key = parts.filter((p) => !['ctrl', 'shift', 'alt'].includes(p))[0];
-      if (
-        ctrl &&
-        shift &&
-        alt &&
-        key &&
-        e.key.toLowerCase() === key.toLowerCase()
-      ) {
+    const keyToPart = (e: KeyboardEvent): string | null => {
+      const key = e.key;
+      if (key === 'Control') return 'Ctrl';
+      if (key === 'Shift') return 'Shift';
+      if (key === 'Alt') return 'Alt';
+      if (['Meta', 'OS', 'Win'].includes(key)) return null;
+      return key.length === 1 ? key.toUpperCase() : key;
+    };
+
+    const keysPressed = new Set<string>();
+    const hotkeySet = new Set(
+      hotkey
+        .split('+')
+        .map((p) =>
+          p.trim().length === 1 ? p.trim().toUpperCase() : p.trim(),
+        ),
+    );
+
+    const checkMatch = () =>
+      hotkeySet.size === keysPressed.size &&
+      [...hotkeySet].every((k) => keysPressed.has(k));
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      const part = keyToPart(e);
+      if (!part) return;
+      keysPressed.add(part);
+      if (checkMatch()) {
         e.preventDefault();
-        lock();
-        getCurrentWindow()
-          .minimize()
-          .catch(() => {});
+        keysPressed.clear();
+        if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+          getCurrentWindow()
+            .hide()
+            .then(() => lock())
+            .catch(() => lock());
+        } else {
+          lock();
+        }
       }
     };
 
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    const onKeyUp = (e: KeyboardEvent) => {
+      const part = keyToPart(e);
+      if (part) keysPressed.delete(part);
+    };
+
+    window.addEventListener('keydown', onKeyDown, { capture: true });
+    window.addEventListener('keyup', onKeyUp, { capture: true });
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, { capture: true });
+      window.removeEventListener('keyup', onKeyUp, { capture: true });
+    };
   }, [isUnlocked, lockHotkey, lock]);
 }

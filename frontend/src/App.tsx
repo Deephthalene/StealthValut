@@ -3,9 +3,12 @@ import {
   GlobalLayerDialog,
   GlobalToast,
 } from '@/components/templates';
+import { useSystemTray } from '@/hooks/useSystemTray';
 import { AppRoutes } from '@/router';
 
 function App() {
+  useSystemTray();
+
   return (
     <>
       <GlobalLayerDialog />

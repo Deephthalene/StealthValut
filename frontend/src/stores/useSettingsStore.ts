@@ -11,9 +11,20 @@ export const AUTO_LOCK_OPTIONS = [
 
 interface SettingsState {
   autoLockMinutes: number;
+  /** 잠금 단축키 (2~3개 키 조합, 빈 문자열 = 미설정) */
   lockHotkey: string;
   setAutoLockMinutes: (v: number) => void;
   setLockHotkey: (v: string) => void;
+}
+
+function migrateLockHotkey(persisted: unknown): string {
+  const p = persisted as Record<string, unknown> | undefined;
+  if (!p) return '';
+  const hotkey = p.lockHotkey as string | undefined;
+  if (typeof hotkey === 'string') return hotkey;
+  const hotkeys = p.lockHotkeys as string[] | undefined;
+  if (Array.isArray(hotkeys) && hotkeys[0]) return hotkeys[0];
+  return '';
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -24,6 +35,12 @@ export const useSettingsStore = create<SettingsState>()(
       setAutoLockMinutes: (v) => set({ autoLockMinutes: v }),
       setLockHotkey: (v) => set({ lockHotkey: v }),
     }),
-    { name: 'vault-settings' },
+    {
+      name: 'vault-settings',
+      merge: (persisted, current) => {
+        const hotkey = migrateLockHotkey(persisted);
+        return { ...current, ...(persisted as object), lockHotkey: hotkey };
+      },
+    },
   ),
 );
