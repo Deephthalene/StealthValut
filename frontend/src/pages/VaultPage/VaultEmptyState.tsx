@@ -32,7 +32,11 @@ export default function VaultEmptyState({
           <Folder size={40} className="mx-auto mb-2 opacity-50" />
           <p>이 폴더가 비어 있습니다</p>
           <p className="mt-1 text-xs">
-            새 폴더를 만들거나 파일을 업로드하세요.
+            새 폴더를 만들거나 파일·폴더를 끌어다 놓아 업로드하세요.
+          </p>
+          <p className="mt-2 text-xs text-muted-foreground/80">
+            파일을 밖으로 끌어내기는 지원하지 않습니다. 내보내기는 우클릭 메뉴를
+            이용하세요.
           </p>
         </>
       )}

@@ -106,6 +106,10 @@ function VaultPage() {
     current: number;
     total: number;
   } | null>(null);
+  const [exportProgress, setExportProgress] = useState<{
+    current: number;
+    total: number;
+  } | null>(null);
   const [exportingId, setExportingId] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState('');
   const [isDragOver, setIsDragOver] = useState(false);
@@ -175,6 +179,7 @@ function VaultPage() {
     else if (file.file_kind === 'audio') setAudioFile(file);
     else if (file.file_kind === 'video') setVideoFile(file);
     else if (file.file_kind === 'document') setDocFile(file);
+    else toast.info('지원하지 않는 형식의 파일입니다.');
   };
 
   const handleFolderClick = (
@@ -261,8 +266,11 @@ function VaultPage() {
     if (!destFolder) return;
     const folder = Array.isArray(destFolder) ? destFolder[0] : destFolder;
 
+    const total = selectedFiles.length + selectedFolders.length;
+    setExportProgress({ current: 0, total });
     setUploading(true);
     let ok = 0;
+    let done = 0;
     for (const file of selectedFiles) {
       try {
         const destPath = `${folder}\\${file.original_name}`;
@@ -271,6 +279,8 @@ function VaultPage() {
       } catch {
         // continue
       }
+      done++;
+      setExportProgress({ current: done, total });
     }
     for (const f of selectedFolders) {
       try {
@@ -282,7 +292,10 @@ function VaultPage() {
       } catch {
         // continue
       }
+      done++;
+      setExportProgress({ current: done, total });
     }
+    setExportProgress(null);
     setUploading(false);
     if (ok > 0) {
       toast.success(`${ok}개 항목 내보내기 완료`);
@@ -598,13 +611,18 @@ function VaultPage() {
 
   const handleExport = async (file: FileItem) => {
     setExportingId(file.id);
+    setExportProgress({ current: 0, total: 1 });
     setUploadError('');
     try {
       const dest = await save({
         title: '내보낼 위치 선택 (금고에서 삭제됩니다)',
         defaultPath: file.original_name,
       });
-      if (!dest) return;
+      if (!dest) {
+        setExportProgress(null);
+        return;
+      }
+      setExportProgress({ current: 1, total: 1 });
       await invoke('vault_extract_file', {
         fileId: file.id,
         destPath: dest,
@@ -618,6 +636,7 @@ function VaultPage() {
       toast.error(msg);
     } finally {
       setExportingId(null);
+      setExportProgress(null);
     }
   };
 
@@ -1014,6 +1033,7 @@ function VaultPage() {
       else if (file.file_kind === 'audio') setAudioFile(file);
       else if (file.file_kind === 'video') setVideoFile(file);
       else if (file.file_kind === 'document') setDocFile(file);
+      else toast.info('지원하지 않는 형식의 파일입니다.');
     },
     onExtractArchive: handleExtractArchive,
     onRename: (file: FileItem) => {
@@ -1103,6 +1123,7 @@ function VaultPage() {
         showProgress={showProgress}
         uploading={uploading}
         uploadProgress={uploadProgress}
+        exportProgress={exportProgress}
         deleteTarget={deleteTarget}
         setDeleteTarget={setDeleteTarget}
         onDeleteConfirm={handleDeleteConfirm}
@@ -1162,7 +1183,7 @@ function VaultPage() {
       {/* 콘텐츠 그리드 */}
       <div
         ref={scrollParentRef}
-        className={`flex-1 min-h-0 overflow-auto rounded-lg transition-colors ${
+        className={`flex-1 min-h-0 overflow-auto rounded-lg transition-colors relative ${
           isDragOver ? 'ring-2 ring-primary bg-primary/5' : ''
         }`}
         onScroll={(e) => {
@@ -1174,6 +1195,17 @@ function VaultPage() {
           }
         }}
       >
+        {isDragOver && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none z-10">
+            <p className="text-sm font-medium text-primary">
+              여기에 놓으면 업로드됩니다
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              ※ 밖으로 끌어내기는 지원하지 않습니다. 내보내기는 우클릭 메뉴를
+              이용하세요.
+            </p>
+          </div>
+        )}
         {loading ||
         (sortedFolders.length === 0 &&
           sortedFiles.length === 0 &&

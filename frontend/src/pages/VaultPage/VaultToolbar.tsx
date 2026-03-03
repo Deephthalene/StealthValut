@@ -202,6 +202,9 @@ export default function VaultToolbar(props: VaultToolbarProps) {
             <FolderInput size={16} />
             폴더 업로드
           </button>
+          <span className="text-xs text-foreground/80 ml-2 px-2 py-1 rounded bg-muted/60">
+            내보내기: 우클릭 메뉴 사용 (끌어내기 미지원)
+          </span>
           <div className="flex-1" />
           <div className="relative">
             <Search

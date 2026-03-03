@@ -5,6 +5,7 @@ interface VaultModalsProps {
   showProgress: boolean;
   uploading: boolean;
   uploadProgress: { current: number; total: number } | null;
+  exportProgress: { current: number; total: number } | null;
   deleteTarget: { type: 'file' | 'folder'; id: string; name: string } | null;
   setDeleteTarget: (v: null) => void;
   onDeleteConfirm: () => Promise<void>;
@@ -22,6 +23,7 @@ export default function VaultModals({
   showProgress,
   uploading,
   uploadProgress,
+  exportProgress,
   deleteTarget,
   setDeleteTarget,
   onDeleteConfirm,
@@ -41,18 +43,20 @@ export default function VaultModals({
           <div className="flex flex-col items-center gap-3 px-6 py-4 rounded-lg bg-card border shadow-lg">
             <Loader2 size={32} className="animate-spin text-primary" />
             <p className="text-sm font-medium">
-              {uploading
-                ? uploadProgress
-                  ? `업로드 중... ${uploadProgress.current}/${uploadProgress.total}`
-                  : '처리 중...'
-                : '내보내는 중...'}
+              {uploadProgress
+                ? `업로드 중... ${uploadProgress.current}/${uploadProgress.total}`
+                : exportProgress
+                  ? `내보내기 중... ${exportProgress.current}/${exportProgress.total}`
+                  : uploading
+                    ? '처리 중...'
+                    : '내보내는 중...'}
             </p>
-            {uploadProgress && (
+            {(uploadProgress || exportProgress) && (
               <div className="w-48 h-1.5 bg-muted rounded-full overflow-hidden">
                 <div
                   className="h-full bg-primary transition-all"
                   style={{
-                    width: `${(uploadProgress.current / uploadProgress.total) * 100}%`,
+                    width: `${((uploadProgress ?? exportProgress)!.current / (uploadProgress ?? exportProgress)!.total) * 100}%`,
                   }}
                 />
               </div>
