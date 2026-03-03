@@ -11,6 +11,7 @@ import { useVaultFolderStore } from '@/stores/useVaultFolderStore';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
+import { startDrag } from '@crabnebula/tauri-plugin-drag';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import VaultContentGrid from './VaultContentGrid';
@@ -647,6 +648,51 @@ function VaultPage() {
     [load],
   );
 
+  // 외부 드래그아웃: 파일을 복호화 → OS 네이티브 드래그 → 금고에서 삭제
+  const externalDragInProgressRef = useRef(false);
+  const handleExternalDragOut = useCallback(
+    async (fileIds: string[]) => {
+      if (externalDragInProgressRef.current || fileIds.length === 0) return;
+      externalDragInProgressRef.current = true;
+      try {
+        // 임시 복호화 + 아이콘 준비
+        const tempPaths: string[] = [];
+        let iconPath = '';
+        for (const fileId of fileIds) {
+          const [filePath, icon] = await invoke<[string, string]>(
+            'vault_prepare_drag_out',
+            { fileId },
+          );
+          tempPaths.push(filePath);
+          if (!iconPath) iconPath = icon;
+        }
+        // OS 네이티브 드래그 시작 (마우스 버튼 누른 상태에서 OS가 제어)
+        let dropped = false;
+        await startDrag(
+          { item: tempPaths, icon: iconPath },
+          (event) => {
+            if (event.result === 'Dropped') dropped = true;
+          },
+        );
+        if (dropped) {
+          // 드래그 성공 → 금고에서 삭제
+          for (const fileId of fileIds) {
+            await invoke('vault_confirm_drag_out', { fileId });
+          }
+          toast.success(`${fileIds.length}개 파일을 내보냈습니다`);
+          await load();
+          dispatchVaultFilesChanged();
+        }
+        // 드래그 취소 → 금고 파일 유지 (temp 파일은 다음 기회에 정리)
+      } catch {
+        // 오류 발생 — 금고 파일 유지
+      } finally {
+        externalDragInProgressRef.current = false;
+      }
+    },
+    [load],
+  );
+
   const onInternalPointerDown = useCallback(
     (
       fileIds: string[],
@@ -689,6 +735,8 @@ function VaultPage() {
   );
 
   useEffect(() => {
+    const EDGE_MARGIN = 20; // 창 가장자리 감지 여백(px)
+
     const onMove = (e: PointerEvent) => {
       const d = internalDragRef.current;
       if (!d) return;
@@ -701,6 +749,27 @@ function VaultPage() {
         document.body.style.cursor = 'grabbing';
         document.body.style.userSelect = 'none';
       }
+
+      // 창 경계 근처 → 외부 드래그아웃 전환 (파일만, 폴더는 내부 이동만)
+      const nearEdge =
+        e.clientX <= EDGE_MARGIN ||
+        e.clientY <= EDGE_MARGIN ||
+        e.clientX >= window.innerWidth - EDGE_MARGIN ||
+        e.clientY >= window.innerHeight - EDGE_MARGIN;
+      if (nearEdge && d.fileIds.length > 0) {
+        const dragFileIds = [...d.fileIds];
+        // 내부 드래그 정리
+        internalDragRef.current = null;
+        internalDragActiveRef.current = false;
+        setInternalDragCount(null);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        setDragOverFolderId(null);
+        internalDragJustFinishedRef.current = true;
+        handleExternalDragOut(dragFileIds);
+        return;
+      }
+
       const el = document.elementFromPoint(e.clientX, e.clientY);
       const card = el?.closest('[data-vault-folder-id]') as HTMLElement | null;
       const folderId = card?.getAttribute('data-vault-folder-id') ?? null;
@@ -716,6 +785,19 @@ function VaultPage() {
       document.body.style.userSelect = '';
       setDragOverFolderId(null);
       if (!d || !wasActive) return;
+
+      // 창 밖에서 pointerup → 외부 드래그아웃
+      const outsideWindow =
+        e.clientX <= 0 ||
+        e.clientY <= 0 ||
+        e.clientX >= window.innerWidth ||
+        e.clientY >= window.innerHeight;
+      if (outsideWindow && d.fileIds.length > 0) {
+        internalDragJustFinishedRef.current = true;
+        handleExternalDragOut(d.fileIds);
+        return;
+      }
+
       const el = document.elementFromPoint(e.clientX, e.clientY);
       const card = el?.closest('[data-vault-folder-id]') as HTMLElement | null;
       const folderId = card?.getAttribute('data-vault-folder-id') ?? null;
@@ -732,7 +814,7 @@ function VaultPage() {
       document.removeEventListener('pointerup', onUp);
       document.removeEventListener('pointercancel', onUp);
     };
-  }, [handleInternalMove]);
+  }, [handleInternalMove, handleExternalDragOut]);
 
   // --- File operations ---
   const handleDeleteFile = async (fileId: string) => {

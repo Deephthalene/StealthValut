@@ -246,7 +246,14 @@ pub fn vault_move_file(
     match fs::rename(source_path, &temp_path) {
         Ok(()) => {}
         Err(e) => {
-            let cross_dev = cfg!(unix) && e.raw_os_error() == Some(18); // EXDEV
+            // 크로스 디바이스/드라이브 이동 실패 시 복사 + 원본 삭제
+            let cross_dev = if cfg!(unix) {
+                e.raw_os_error() == Some(18) // EXDEV
+            } else if cfg!(windows) {
+                e.raw_os_error() == Some(17) // ERROR_NOT_SAME_DEVICE
+            } else {
+                false
+            };
             if cross_dev {
                 fs::copy(source_path, &temp_path).map_err(|e| e.to_string())?;
                 secure_delete(source_path)?;
@@ -997,6 +1004,133 @@ pub fn vault_prepare_drag_out(base: &Path, file_id: &str) -> Result<String, Stri
     decrypt_to_writer(&enc_path, header_enc.as_deref(), &dek, &mut writer)?;
 
     Ok(temp_path.to_string_lossy().to_string())
+}
+
+/// 드래그아웃 아이콘 경로 반환 (썸네일 → PNG 저장, 없으면 기본 아이콘 생성)
+pub fn get_drag_icon(base: &Path, file_id: &str) -> Result<String, String> {
+    let temp_dir = std::env::temp_dir().join("stealthvault_drag");
+    fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
+    let icon_path = temp_dir.join(format!("{}_icon.png", file_id));
+
+    // 이미 아이콘이 있으면 재사용
+    if icon_path.exists() {
+        return Ok(icon_path.to_string_lossy().to_string());
+    }
+
+    // files_index에서 썸네일 가져오기
+    let conn = conn(base)?;
+    let thumb: Option<Vec<u8>> = conn
+        .query_row(
+            "SELECT thumbnail_blob FROM files_index WHERE id = ?1",
+            [file_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(None);
+
+    if let Some(data) = thumb {
+        // JPEG 썸네일을 그대로 저장 (PNG 변환 불필요, startDrag가 JPEG도 지원)
+        let jpeg_path = temp_dir.join(format!("{}_icon.jpg", file_id));
+        fs::write(&jpeg_path, &data).map_err(|e| e.to_string())?;
+        return Ok(jpeg_path.to_string_lossy().to_string());
+    }
+
+    // 썸네일 없으면 최소 32x32 RGBA PNG 생성 (반투명 회색 사각형)
+    let default_icon = temp_dir.join("_default_icon.png");
+    if !default_icon.exists() {
+        // 최소 유효 32x32 PNG (회색 반투명)
+        let png_data = create_minimal_png();
+        fs::write(&default_icon, &png_data).map_err(|e| e.to_string())?;
+    }
+    Ok(default_icon.to_string_lossy().to_string())
+}
+
+/// 최소 32x32 PNG 바이너리 생성 (외부 크레이트 없이)
+fn create_minimal_png() -> Vec<u8> {
+    let width: u32 = 32;
+    let height: u32 = 32;
+    // RGBA: 반투명 회색 (128, 128, 128, 180)
+    let mut raw_rows = Vec::new();
+    for _ in 0..height {
+        raw_rows.push(0u8); // filter: None
+        for _ in 0..width {
+            raw_rows.extend_from_slice(&[128, 128, 128, 180]);
+        }
+    }
+    // zlib deflate (stored, no compression)
+    let deflated = zlib_store(&raw_rows);
+    let mut out = Vec::new();
+    // PNG signature
+    out.extend_from_slice(&[137, 80, 78, 71, 13, 10, 26, 10]);
+    // IHDR
+    let mut ihdr = Vec::new();
+    ihdr.extend_from_slice(&width.to_be_bytes());
+    ihdr.extend_from_slice(&height.to_be_bytes());
+    ihdr.push(8); // bit depth
+    ihdr.push(6); // color type: RGBA
+    ihdr.extend_from_slice(&[0, 0, 0]); // compression, filter, interlace
+    write_chunk(&mut out, b"IHDR", &ihdr);
+    // IDAT
+    write_chunk(&mut out, b"IDAT", &deflated);
+    // IEND
+    write_chunk(&mut out, b"IEND", &[]);
+    out
+}
+
+fn write_chunk(out: &mut Vec<u8>, chunk_type: &[u8; 4], data: &[u8]) {
+    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    out.extend_from_slice(chunk_type);
+    out.extend_from_slice(data);
+    let mut crc_data = Vec::with_capacity(4 + data.len());
+    crc_data.extend_from_slice(chunk_type);
+    crc_data.extend_from_slice(data);
+    let crc = crc32(&crc_data);
+    out.extend_from_slice(&crc.to_be_bytes());
+}
+
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc: u32 = 0xFFFFFFFF;
+    for &byte in data {
+        crc ^= byte as u32;
+        for _ in 0..8 {
+            if crc & 1 != 0 {
+                crc = (crc >> 1) ^ 0xEDB88320;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+    crc ^ 0xFFFFFFFF
+}
+
+fn zlib_store(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.push(0x78); // CMF
+    out.push(0x01); // FLG
+    // deflate stored blocks
+    let chunks = data.chunks(65535);
+    let total = chunks.len();
+    for (i, chunk) in data.chunks(65535).enumerate() {
+        let last = i + 1 == total;
+        out.push(if last { 1 } else { 0 }); // BFINAL
+        let len = chunk.len() as u16;
+        out.extend_from_slice(&len.to_le_bytes());
+        out.extend_from_slice(&(!len).to_le_bytes());
+        out.extend_from_slice(chunk);
+    }
+    // Adler-32
+    let adler = adler32(data);
+    out.extend_from_slice(&adler.to_be_bytes());
+    out
+}
+
+fn adler32(data: &[u8]) -> u32 {
+    let mut a: u32 = 1;
+    let mut b: u32 = 0;
+    for &byte in data {
+        a = (a + byte as u32) % 65521;
+        b = (b + a) % 65521;
+    }
+    (b << 16) | a
 }
 
 /// 드래그 완료 후 금고에서 삭제 (vault_prepare_drag_out 후 startDrag 끝난 시점에 호출)

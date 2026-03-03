@@ -187,6 +187,55 @@ pub fn vault_reset_password(
     Ok(())
 }
 
+/// 현재 비밀번호로 인증 후 새 비밀번호로 변경 + DEK 재암호화
+pub fn vault_change_password(
+    base: &Path,
+    current_password: &str,
+    new_password: &str,
+) -> Result<(), String> {
+    let path = vault_config_path(base);
+    let data = fs::read_to_string(&path).map_err(|_| "금고 설정을 찾을 수 없습니다.")?;
+    let mut config: VaultConfig =
+        serde_json::from_str(&data).map_err(|e| e.to_string())?;
+
+    if !verify_password(current_password, &config.password_hash)? {
+        return Err("현재 비밀번호가 올바르지 않습니다.".into());
+    }
+
+    config.password_hash = hash_password(new_password)?;
+
+    if let (Some(salt_b64), Some(enc_pw_b64)) = (
+        config.dek_salt_b64.as_ref(),
+        config.encrypted_dek_pw_b64.as_ref(),
+    ) {
+        let dek_salt = base64::engine::general_purpose::STANDARD
+            .decode(salt_b64)
+            .map_err(|e| e.to_string())?;
+        let enc_pw = base64::engine::general_purpose::STANDARD
+            .decode(enc_pw_b64)
+            .map_err(|e| e.to_string())?;
+        let kek_old = crypto::derive_kek(current_password, &dek_salt)?;
+        let dek = crypto::decrypt(&enc_pw, &kek_old)?;
+        let dek_arr: [u8; KEY_LEN] = dek
+            .as_slice()
+            .try_into()
+            .map_err(|_| "DEK 길이 오류".to_string())?;
+        let kek_new = crypto::derive_kek(new_password, &dek_salt)?;
+        let enc_new = crypto::encrypt(&dek_arr, &kek_new)?;
+        config.encrypted_dek_pw_b64 =
+            Some(base64::engine::general_purpose::STANDARD.encode(&enc_new));
+    }
+
+    let json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
+    fs::write(&path, json).map_err(|e| e.to_string())?;
+
+    // 캐시된 DEK 갱신 (새 비밀번호 기반)
+    key_cache::clear_dek();
+    vault_cache_key(base, new_password)?;
+
+    Ok(())
+}
+
 /// 개발용: 금고 초기화 (설정·DB·암호화 데이터 삭제)
 pub fn vault_reset(base: &Path) -> Result<(), String> {
     let config_path = vault_config_path(base);

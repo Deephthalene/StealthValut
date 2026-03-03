@@ -189,6 +189,16 @@ fn vault_reset_password(recovery_key: String, new_password: String) -> Result<()
     )
 }
 
+/// 현재 비밀번호로 인증 후 새 비밀번호로 변경
+#[tauri::command]
+fn vault_change_password(current_password: String, new_password: String) -> Result<(), String> {
+    vault::vault_change_password(
+        &vault_base_path(),
+        &current_password,
+        &new_password,
+    )
+}
+
 /// 개발용: 금고 초기화 (신규 생성 화면 다시 보기)
 #[tauri::command]
 fn vault_reset() -> Result<(), String> {
@@ -380,10 +390,13 @@ fn vault_copy_out(file_id: String, dest_path: String) -> Result<(), String> {
     )
 }
 
-/// 드래그아웃 준비: 임시 복호화 경로 반환
+/// 드래그아웃 준비: (복호화 파일 경로, 아이콘 경로) 반환
 #[tauri::command]
-fn vault_prepare_drag_out(file_id: String) -> Result<String, String> {
-    vault_files::vault_prepare_drag_out(&vault_base_path(), &file_id)
+fn vault_prepare_drag_out(file_id: String) -> Result<(String, String), String> {
+    let base = vault_base_path();
+    let file_path = vault_files::vault_prepare_drag_out(&base, &file_id)?;
+    let icon_path = vault_files::get_drag_icon(&base, &file_id)?;
+    Ok((file_path, icon_path))
 }
 
 /// 드래그 완료 후 금고에서 삭제
@@ -572,6 +585,7 @@ pub fn run() {
             vault_clear_key,
             vault_verify_recovery_key,
             vault_reset_password,
+            vault_change_password,
             vault_reset,
             list_folders,
             list_all_folders,

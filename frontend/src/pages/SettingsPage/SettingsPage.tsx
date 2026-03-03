@@ -1,8 +1,16 @@
 import { AUTO_LOCK_OPTIONS, useSettingsStore } from '@/stores/useSettingsStore';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
-import { Crown, FolderOpen, Keyboard, Loader2, Timer } from 'lucide-react';
+import {
+  Crown,
+  FolderOpen,
+  Keyboard,
+  Lock,
+  Loader2,
+  Timer,
+} from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
+import { toast } from 'sonner';
 
 function isTauriEnv(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -82,6 +90,14 @@ export default function SettingsPage() {
   const [activateError, setActivateError] = useState('');
   const [activateLoading, setActivateLoading] = useState(false);
 
+  // 비밀번호 변경
+  const [pwModal, setPwModal] = useState(false);
+  const [pwCurrent, setPwCurrent] = useState('');
+  const [pwNew, setPwNew] = useState('');
+  const [pwConfirm, setPwConfirm] = useState('');
+  const [pwError, setPwError] = useState('');
+  const [pwLoading, setPwLoading] = useState(false);
+
   useEffect(() => {
     if (isTauriEnv()) {
       setPathLoading(true);
@@ -153,6 +169,61 @@ export default function SettingsPage() {
     }
   }, [activateKey, activateEmail]);
 
+  const handleChangePassword = useCallback(async () => {
+    setPwError('');
+
+    if (!pwCurrent.trim()) {
+      setPwError('현재 비밀번호를 입력해주세요.');
+      return;
+    }
+    if (!pwNew) {
+      setPwError('새 비밀번호를 입력해주세요.');
+      return;
+    }
+    if (pwNew.length < 6) {
+      setPwError('새 비밀번호는 6자 이상이어야 합니다.');
+      return;
+    }
+    if (pwNew !== pwConfirm) {
+      setPwError('새 비밀번호와 확인이 일치하지 않습니다.');
+      return;
+    }
+    if (pwCurrent === pwNew) {
+      setPwError('현재 비밀번호와 새 비밀번호가 같습니다.');
+      return;
+    }
+
+    setPwLoading(true);
+    try {
+      await invoke('vault_change_password', {
+        currentPassword: pwCurrent,
+        newPassword: pwNew,
+      });
+      toast.success('비밀번호가 변경되었습니다.');
+      setPwModal(false);
+      setPwCurrent('');
+      setPwNew('');
+      setPwConfirm('');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes('현재 비밀번호')) {
+        setPwError('현재 비밀번호가 올바르지 않습니다.');
+      } else {
+        setPwError(msg);
+      }
+    } finally {
+      setPwLoading(false);
+    }
+  }, [pwCurrent, pwNew, pwConfirm]);
+
+  const closePwModal = () => {
+    setPwModal(false);
+    setPwCurrent('');
+    setPwNew('');
+    setPwConfirm('');
+    setPwError('');
+  };
+
   return (
     <div className="divide-y divide-border">
       <div className="flex items-center justify-between px-6 py-4">
@@ -180,6 +251,22 @@ export default function SettingsPage() {
         </span>
         <HotkeyInput value={lockHotkey} onChange={setLockHotkey} />
       </div>
+
+      {isTauriEnv() && (
+        <div className="flex items-center justify-between px-6 py-4">
+          <span className="flex items-center gap-2 text-sm">
+            <Lock size={15} className="text-muted-foreground" />
+            비밀번호 변경
+          </span>
+          <button
+            type="button"
+            onClick={() => setPwModal(true)}
+            className="px-4 py-1.5 rounded-lg text-xs font-medium border border-border bg-secondary hover:bg-accent transition-colors"
+          >
+            변경
+          </button>
+        </div>
+      )}
 
       {isTauriEnv() && (
         <div className="px-6 py-4 space-y-2">
@@ -245,6 +332,93 @@ export default function SettingsPage() {
           </button>
         )}
       </div>
+
+      {/* 비밀번호 변경 모달 */}
+      {pwModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-card border border-border rounded-lg shadow-lg p-6 max-w-md mx-4">
+            <h3 className="font-semibold text-sm mb-4">비밀번호 변경</h3>
+            <div className="space-y-3 mb-4">
+              <div>
+                <label className="block text-xs mb-1">현재 비밀번호 *</label>
+                <input
+                  type="password"
+                  value={pwCurrent}
+                  onChange={(e) => {
+                    setPwCurrent(e.target.value);
+                    setPwError('');
+                  }}
+                  placeholder="현재 비밀번호 입력"
+                  className="w-full px-3 py-2 rounded-lg text-sm border border-border bg-secondary"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleChangePassword();
+                  }}
+                />
+              </div>
+              <div>
+                <label className="block text-xs mb-1">
+                  새 비밀번호 * (6자 이상)
+                </label>
+                <input
+                  type="password"
+                  value={pwNew}
+                  onChange={(e) => {
+                    setPwNew(e.target.value);
+                    setPwError('');
+                  }}
+                  placeholder="새 비밀번호 입력"
+                  className="w-full px-3 py-2 rounded-lg text-sm border border-border bg-secondary"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleChangePassword();
+                  }}
+                />
+              </div>
+              <div>
+                <label className="block text-xs mb-1">새 비밀번호 확인 *</label>
+                <input
+                  type="password"
+                  value={pwConfirm}
+                  onChange={(e) => {
+                    setPwConfirm(e.target.value);
+                    setPwError('');
+                  }}
+                  placeholder="새 비밀번호 다시 입력"
+                  className="w-full px-3 py-2 rounded-lg text-sm border border-border bg-secondary"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleChangePassword();
+                  }}
+                />
+              </div>
+            </div>
+            {pwError && (
+              <p className="text-xs text-destructive mb-4">{pwError}</p>
+            )}
+            <div className="flex gap-2 justify-end">
+              <button
+                type="button"
+                onClick={closePwModal}
+                disabled={pwLoading}
+                className="px-4 py-2 rounded-lg text-xs border border-border hover:bg-accent disabled:opacity-50"
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                onClick={handleChangePassword}
+                disabled={pwLoading}
+                className="px-4 py-2 rounded-lg text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              >
+                {pwLoading ? (
+                  <Loader2 size={14} className="animate-spin" />
+                ) : (
+                  '변경'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {confirmModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
@@ -332,7 +506,7 @@ export default function SettingsPage() {
                     />
                   </div>
                   <p className="text-xs text-muted-foreground pt-1">
-                    💳 계좌이체: 신한은행 110-444-226804
+                    계좌이체: 신한은행 110-444-226804
                   </p>
                 </div>
                 {purchaseError && (
