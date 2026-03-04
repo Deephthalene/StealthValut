@@ -32,6 +32,7 @@ pub const MAGIC: [u8; 2] = *b"SV";
 pub const FORMAT_V1: u8 = 1;
 
 pub struct ChunkedHeader {
+    #[allow(dead_code)]
     pub version: u8,
     pub chunk_size: u32,
 }

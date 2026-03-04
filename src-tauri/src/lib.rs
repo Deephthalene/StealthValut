@@ -90,7 +90,7 @@ fn get_license_status() -> Result<LicenseStatus, String> {
             is_premium: false,
             email: None,
         }),
-        Err(e) => Ok(LicenseStatus {
+        Err(_e) => Ok(LicenseStatus {
             is_premium: false,
             email: None,
         }),
@@ -130,13 +130,20 @@ fn get_disk_free_for_path(path: String) -> u64 {
 }
 
 /// 금고 저장 위치 변경 (잘라내기 방식 — .vault_config, vault.db, data/, license.dat 이동)
+/// 반환: 새 경로 문자열 (프론트에서 표시·갱신용). 진행 시 vault-move-progress 이벤트 전송.
 #[tauri::command]
-fn change_vault_location(new_path: String) -> Result<(), String> {
+fn change_vault_location(app: tauri::AppHandle, new_path: String) -> Result<String, String> {
+    use tauri::Emitter;
     let path = PathBuf::from(new_path.trim());
     if path.as_os_str().is_empty() {
         return Err("경로가 비어있습니다.".into());
     }
-    vault_location::change_vault_location(path.as_path())
+    let app_emit = app.clone();
+    let progress = Some(Box::new(move |done: u64, total: u64| {
+        let payload = serde_json::json!({ "done": done, "total": total });
+        let _ = app_emit.emit("vault-move-progress", payload);
+    }) as Box<dyn FnMut(u64, u64) + Send>);
+    vault_location::change_vault_location_with_progress(path.as_path(), progress)
 }
 
 /// 금고 초기화: 저장 경로 + 비밀번호로 설정, 복구 키 반환 (설정에서 경로 변경 가능)
@@ -396,26 +403,7 @@ fn vault_copy_out(file_id: String, dest_path: String) -> Result<(), String> {
     )
 }
 
-/// 드래그아웃 준비: (복호화 파일 경로, 아이콘 경로) 반환
-#[tauri::command]
-fn vault_prepare_drag_out(file_id: String) -> Result<(String, String), String> {
-    let base = vault_base_path();
-    let file_path = vault_files::vault_prepare_drag_out(&base, &file_id)?;
-    let icon_path = vault_files::get_drag_icon(&base, &file_id)?;
-    Ok((file_path, icon_path))
-}
 
-/// 드래그 완료 후 금고에서 삭제
-#[tauri::command]
-fn vault_confirm_drag_out(file_id: String) -> Result<(), String> {
-    vault_files::vault_confirm_drag_out(&vault_base_path(), &file_id)
-}
-
-/// 드래그아웃 임시 파일만 정리 (금고 유지)
-#[tauri::command]
-fn vault_cleanup_drag_temp(file_id: String) {
-    vault_files::vault_cleanup_drag_temp(&file_id);
-}
 
 /// 스트리밍 프로토콜 핸들러: stream://localhost/{file_id}
 fn handle_stream_request(
@@ -576,7 +564,8 @@ pub fn run() {
         })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_drag::init())
+
+
         .register_asynchronous_uri_scheme_protocol("stream", move |_ctx, request, responder| {
             std::thread::spawn(move || {
                 match handle_stream_request(request) {
@@ -625,9 +614,6 @@ pub fn run() {
             vault_extract_file,
             vault_extract_folder,
             vault_copy_out,
-            vault_prepare_drag_out,
-            vault_confirm_drag_out,
-            vault_cleanup_drag_temp,
             change_vault_location,
             verify_and_activate_license,
             get_license_status,

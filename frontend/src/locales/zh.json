@@ -208,6 +208,8 @@
     "confirmPasswordPlaceholder": "再次输入新密码",
     "changeLocationTitle": "更改存储位置",
     "changeLocationDesc": "更改位置将移动所有文件。根据大小可能需要一段时间。继续？",
+    "changeLocationSuccess": "存储位置已更改。",
+    "moving": "移动中...",
     "continue": "继续",
     "purchaseTitle": "StealthVault 高级版",
     "purchaseSuccess": "请求已发送。转账后1个工作日内将邮件发送许可证密钥。",

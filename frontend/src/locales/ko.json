@@ -208,6 +208,8 @@
     "confirmPasswordPlaceholder": "새 비밀번호 다시 입력",
     "changeLocationTitle": "저장 위치 변경",
     "changeLocationDesc": "저장 위치를 변경하면 모든 파일이 새 경로로 이동됩니다. 파일 크기에 따라 시간이 걸릴 수 있습니다. 계속하시겠습니까?",
+    "changeLocationSuccess": "저장 위치가 변경되었습니다.",
+    "moving": "이동 중...",
     "continue": "계속",
     "purchaseTitle": "StealthVault 프리미엄",
     "purchaseSuccess": "구매 요청이 전송되었습니다. 계좌이체 후 영업일 기준 1일 이내 입력하신 이메일로 라이센스 키를 발송해드립니다.",

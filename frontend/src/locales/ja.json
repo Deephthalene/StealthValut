@@ -208,6 +208,8 @@
     "confirmPasswordPlaceholder": "新しいパスワードを再入力",
     "changeLocationTitle": "保存場所の変更",
     "changeLocationDesc": "場所を変更すると全ファイルが移動します。サイズによって時間がかかります。続行しますか？",
+    "changeLocationSuccess": "保存場所を変更しました。",
+    "moving": "移動中...",
     "continue": "続行",
     "purchaseTitle": "StealthVault プレミアム",
     "purchaseSuccess": "リクエストを送信しました。振込後、1営業日以内にメールでライセンスキーをお送りします。",

@@ -176,6 +176,8 @@ fn delete_folder_recursive(base: &Path, id: &str) -> Result<(), String> {
 
     conn.execute("UPDATE files SET folder_id = NULL WHERE folder_id = ?1", [id])
         .map_err(|e| e.to_string())?;
+    conn.execute("UPDATE files_index SET folder_id = NULL WHERE folder_id = ?1", [id])
+        .map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM folders WHERE id = ?1", [id])
         .map_err(|e| e.to_string())?;
 

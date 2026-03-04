@@ -2,7 +2,9 @@
   "$schema": "https://schema.tauri.app/config/2/capability",
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-hide",
@@ -16,8 +18,6 @@
     "dialog:default",
     "dialog:allow-open",
     "dialog:allow-save",
-    "shell:allow-open",
-    "drag:default",
-    "drag:allow-start-drag"
+    "shell:allow-open"
   ]
 }

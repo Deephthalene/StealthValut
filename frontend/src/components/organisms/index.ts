@@ -3,7 +3,6 @@ import GlobalAlertDialog from './GlobalAlertDialog/GlobalAlertDialog';
 import GlobalLayerDialog from './GlobalLayerDialog/GlobalLayerDialog';
 import GlobalToast from './GlobalToast/GlobalToast';
 import Header from './Header/Header';
-import LoginCard from './LoginCard/LoginCard';
 
 export {
   Footer,
@@ -11,5 +10,4 @@ export {
   GlobalLayerDialog,
   GlobalToast,
   Header,
-  LoginCard,
 };

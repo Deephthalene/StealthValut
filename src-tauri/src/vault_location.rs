@@ -14,6 +14,32 @@ const VAULT_DB: &str = "vault.db";
 const DATA_DIR: &str = "data";
 const LICENSE_FILE: &str = "license.dat";
 
+/// 같은 파일시스템인지 확인 (같으면 rename 사용 가능)
+fn same_filesystem(a: &Path, b: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let (Ok(ma), Ok(mb)) = (fs::metadata(a), fs::metadata(b)) {
+            return ma.dev() == mb.dev();
+        }
+    }
+    #[cfg(windows)]
+    {
+        // Windows: 드라이브 레터가 같으면 같은 파일시스템으로 간주
+        let to_drive = |p: &Path| {
+            p.components()
+                .next()
+                .and_then(|c| c.as_os_str().to_str())
+                .and_then(|s| s.chars().next())
+                .map(|c| if ('a'..='z').contains(&c) { ((c as u8) - 32) as char } else { c })
+        };
+        if let (Some(a_d), Some(b_d)) = (to_drive(a), to_drive(b)) {
+            return a_d == b_d;
+        }
+    }
+    false
+}
+
 /// 앱 설정 폴더 (고정 위치, C: 기반)
 fn app_config_dir() -> PathBuf {
     dirs::data_local_dir()
@@ -88,25 +114,46 @@ fn is_path_empty_for_vault(path: &Path) -> bool {
     !config.exists() && !db.exists() && !data.exists()
 }
 
-/// 폴더 재귀 복사
-fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), io::Error> {
+/// 폴더 재귀 복사 (진행률 콜백)
+fn copy_dir_recursive_with_progress<F: FnMut(u64, u64)>(
+    src: &Path,
+    dst: &Path,
+    total_bytes: u64,
+    done: &mut u64,
+    cb: &mut F,
+) -> Result<(), io::Error> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {
         let entry = entry?;
         let ty = entry.file_type()?;
         let dst_path = dst.join(entry.file_name());
         if ty.is_dir() {
-            copy_dir_recursive(&entry.path(), &dst_path)?;
+            copy_dir_recursive_with_progress(&entry.path(), &dst_path, total_bytes, done, cb)?;
         } else {
-            fs::copy(entry.path(), dst_path)?;
+            let len = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            fs::copy(entry.path(), &dst_path)?;
+            *done += len;
+            cb(*done, total_bytes);
         }
     }
     Ok(())
 }
 
+
+
+
+/// 진행률 콜백 (done_bytes, total_bytes). 없으면 None.
+pub type ProgressFn = Option<Box<dyn FnMut(u64, u64) + Send>>;
+
 /// 금고 저장 위치 변경 (잘라내기 방식)
-/// 기존 경로의 .vault_config, vault.db, data/, license.dat를 새 경로로 이동
-pub fn change_vault_location(new_path: &Path) -> Result<(), String> {
+/// - 같은 드라이브: fs::rename으로 실제 이동
+/// - 다른 드라이브: 복사 후 삭제
+/// - 대상에 이미 금고가 있으면: 포인터만 전환(되돌리기 지원)
+/// 반환: 새 경로 문자열 (`.vault_location`에 쓸 값)
+pub fn change_vault_location_with_progress(
+    new_path: &Path,
+    mut progress: ProgressFn,
+) -> Result<String, String> {
     let old_path = resolve_vault_path();
 
     let new_path = {
@@ -133,6 +180,13 @@ pub fn change_vault_location(new_path: &Path) -> Result<(), String> {
         return Err("금고가 초기화되지 않았습니다.".into());
     }
 
+    // 모드 1: 대상에 이미 금고가 있음 → 포인터만 전환 (되돌리기)
+    if crate::vault::vault_exists(&new_abs) {
+        write_vault_path(&new_abs)?;
+        return Ok(new_abs.to_string_lossy().to_string());
+    }
+
+    // 모드 2: 대상이 비어야 함
     if !is_path_empty_for_vault(&new_abs) {
         return Err("선택한 폴더가 비어있지 않습니다.".into());
     }
@@ -147,37 +201,75 @@ pub fn change_vault_location(new_path: &Path) -> Result<(), String> {
 
     fs::create_dir_all(&new_abs).map_err(|e| e.to_string())?;
 
-    let copy_result = (|| -> Result<(), String> {
-        let config_src = old_path.join(VAULT_CONFIG);
-        let config_dst = new_abs.join(VAULT_CONFIG);
-        fs::copy(&config_src, &config_dst).map_err(|e| format!("이동 중 오류: {}", e))?;
+    let mut do_progress = |done: u64, total: u64| {
+        if let Some(ref mut f) = progress {
+            f(done, total);
+        }
+    };
 
-        let db_src = old_path.join(VAULT_DB);
-        let db_dst = new_abs.join(VAULT_DB);
-        if db_src.exists() {
+    let same_fs = same_filesystem(&old_canon, &new_abs);
+    let config_src = old_path.join(VAULT_CONFIG);
+    let config_dst = new_abs.join(VAULT_CONFIG);
+    let db_src = old_path.join(VAULT_DB);
+    let db_dst = new_abs.join(VAULT_DB);
+    let data_src = old_path.join(DATA_DIR);
+    let data_dst = new_abs.join(DATA_DIR);
+    let license_src = old_path.join(LICENSE_FILE);
+    let license_dst = new_abs.join(LICENSE_FILE);
+
+    let mut done_bytes: u64 = 0;
+
+    // 1) config
+    if same_fs {
+        fs::rename(&config_src, &config_dst)
+            .map_err(|e| format!("이동 중 오류: {}", e))?;
+        done_bytes += fs::metadata(&config_dst).map(|m| m.len()).unwrap_or(0);
+        do_progress(done_bytes, vault_used);
+    } else {
+        fs::copy(&config_src, &config_dst)
+            .map_err(|e| format!("이동 중 오류: {}", e))?;
+        done_bytes += fs::metadata(&config_src).map(|m| m.len()).unwrap_or(0);
+        do_progress(done_bytes, vault_used);
+    }
+
+    // 2) db
+    if db_src.exists() {
+        if same_fs {
+            fs::rename(&db_src, &db_dst).map_err(|e| format!("이동 중 오류: {}", e))?;
+            done_bytes += fs::metadata(&db_dst).map(|m| m.len()).unwrap_or(0);
+            do_progress(done_bytes, vault_used);
+        } else {
             fs::copy(&db_src, &db_dst).map_err(|e| format!("이동 중 오류: {}", e))?;
+            done_bytes += fs::metadata(&db_src).map(|m| m.len()).unwrap_or(0);
+            do_progress(done_bytes, vault_used);
         }
+    }
 
-        let data_src = old_path.join(DATA_DIR);
-        let data_dst = new_abs.join(DATA_DIR);
-        if data_src.exists() {
-            copy_dir_recursive(&data_src, &data_dst).map_err(|e| format!("이동 중 오류: {}", e))?;
+    // 3) data
+    if data_src.exists() {
+        if same_fs {
+            fs::rename(&data_src, &data_dst).map_err(|e| format!("이동 중 오류: {}", e))?;
+            done_bytes = vault_used;
+            do_progress(done_bytes, vault_used);
+        } else {
+            copy_dir_recursive_with_progress(
+                &data_src,
+                &data_dst,
+                vault_used,
+                &mut done_bytes,
+                &mut |d, t| do_progress(d, t),
+            )
+            .map_err(|e| format!("이동 중 오류: {}", e))?;
         }
+    }
 
-        let license_src = old_path.join(LICENSE_FILE);
-        if license_src.exists() {
-            let _ = fs::copy(&license_src, new_abs.join(LICENSE_FILE));
+    // 4) license
+    if license_src.exists() {
+        if same_fs {
+            let _ = fs::rename(&license_src, &license_dst);
+        } else {
+            let _ = fs::copy(&license_src, &license_dst);
         }
-
-        Ok(())
-    })();
-
-    if let Err(e) = copy_result {
-        let _ = fs::remove_dir_all(&new_abs);
-        return Err(format!(
-            "이동 중 오류가 발생했습니다. 기존 경로를 유지합니다. ({})",
-            e
-        ));
     }
 
     if !crate::vault::vault_exists(&new_abs) {
@@ -185,16 +277,34 @@ pub fn change_vault_location(new_path: &Path) -> Result<(), String> {
         return Err("이동 검증에 실패했습니다. 기존 경로를 유지합니다.".into());
     }
 
-    let remove_old = || {
-        let _ = fs::remove_file(old_path.join(VAULT_CONFIG));
-        let _ = fs::remove_file(old_path.join(VAULT_DB));
-        let _ = fs::remove_dir_all(old_path.join(DATA_DIR));
-        let _ = fs::remove_file(old_path.join(LICENSE_FILE));
-    };
+    // 기존 경로에서 삭제 (같은 fs면 이미 rename으로 옮겼으므로 없을 수 있음)
+    if !same_fs {
+        let mut delete_failed = Vec::new();
+        if config_src.exists() && fs::remove_file(&config_src).is_err() {
+            delete_failed.push(VAULT_CONFIG);
+        }
+        if db_src.exists() && fs::remove_file(&db_src).is_err() {
+            delete_failed.push(VAULT_DB);
+        }
+        if data_src.exists() && fs::remove_dir_all(&data_src).is_err() {
+            delete_failed.push(DATA_DIR);
+        }
+        if license_src.exists() {
+            let _ = fs::remove_file(&license_src);
+        }
+        if !delete_failed.is_empty() {
+            // 이동은 완료됐지만 기존 삭제 실패 → 앱 재시작 후 수동 삭제 안내
+            eprintln!(
+                "[vault_location] 기존 파일 삭제 실패 (앱 재시작 후 수동 삭제 권장): {:?}",
+                delete_failed
+            );
+        }
+    }
 
-    remove_old();
     let _ = fs::remove_dir(&old_path);
-
     write_vault_path(&new_abs)?;
-    Ok(())
+    Ok(new_abs.to_string_lossy().to_string())
 }
+
+
+

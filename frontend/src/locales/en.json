@@ -208,6 +208,8 @@
     "confirmPasswordPlaceholder": "Re-enter new password",
     "changeLocationTitle": "Change storage location",
     "changeLocationDesc": "Changing location will move all files. This may take a while depending on size. Continue?",
+    "changeLocationSuccess": "Storage location changed.",
+    "moving": "Moving...",
     "continue": "Continue",
     "purchaseTitle": "StealthVault Premium",
     "purchaseSuccess": "Request sent. License key will be emailed within 1 business day after bank transfer.",

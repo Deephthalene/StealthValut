@@ -28,6 +28,7 @@ pub enum LicenseError {
     InvalidSignature,
     EmailMismatch,
     Corrupted,
+    #[allow(dead_code)]
     NotFound,
 }
 

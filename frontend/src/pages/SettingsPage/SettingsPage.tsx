@@ -1,3 +1,4 @@
+import { dispatchVaultFilesChanged } from '@/components/organisms/SidebarStorage/SidebarStorage';
 import {
   AUTO_LOCK_OPTIONS,
   type LanguageCode,
@@ -5,6 +6,7 @@ import {
 } from '@/stores/useSettingsStore';
 import { useThemeStore } from '@/stores/useThemeStore';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import {
   Crown,
@@ -142,6 +144,10 @@ export default function SettingsPage() {
   const [confirmModal, setConfirmModal] = useState<{ newPath: string } | null>(
     null,
   );
+  const [moveProgress, setMoveProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
   const [licenseStatus, setLicenseStatus] = useState<{
     is_premium: boolean;
     email?: string;
@@ -204,16 +210,32 @@ export default function SettingsPage() {
     if (!confirmModal) return;
     setPathChanging(true);
     setPathError('');
+    setMoveProgress(null);
+    const unlisten = await listen<{ done: number; total: number }>(
+      'vault-move-progress',
+      (event) => {
+        const p = event.payload;
+        if (typeof p?.done === 'number' && typeof p?.total === 'number') {
+          setMoveProgress({ done: p.done, total: p.total });
+        }
+      },
+    );
     try {
-      await invoke('change_vault_location', { newPath: confirmModal.newPath });
-      setVaultPath(confirmModal.newPath);
+      const newPath = await invoke<string>('change_vault_location', {
+        newPath: confirmModal.newPath,
+      });
+      setVaultPath(newPath);
       setConfirmModal(null);
+      toast.success(t('settingsModals.changeLocationSuccess'));
+      dispatchVaultFilesChanged();
     } catch (e) {
       setPathError(e instanceof Error ? e.message : String(e));
     } finally {
       setPathChanging(false);
+      setMoveProgress(null);
+      unlisten();
     }
-  }, [confirmModal]);
+  }, [confirmModal, t]);
 
   const handleActivateLicense = useCallback(async () => {
     setActivateError('');
@@ -644,12 +666,29 @@ export default function SettingsPage() {
             {pathError && (
               <p className="text-xs text-destructive mb-4">{pathError}</p>
             )}
+            {pathChanging && moveProgress && moveProgress.total > 0 && (
+              <div className="mb-4">
+                <p className="text-xs text-muted-foreground mb-1">
+                  {t('settingsModals.moving')} (
+                  {Math.round((moveProgress.done / moveProgress.total) * 100)}%)
+                </p>
+                <div className="h-2 bg-muted rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-primary transition-all duration-300"
+                    style={{
+                      width: `${Math.min(100, (moveProgress.done / moveProgress.total) * 100)}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
             <div className="flex gap-2 justify-end">
               <button
                 type="button"
                 onClick={() => {
                   setConfirmModal(null);
                   setPathError('');
+                  setMoveProgress(null);
                 }}
                 disabled={pathChanging}
                 className="px-4 py-2 rounded-lg text-xs border border-border hover:bg-accent disabled:opacity-50"

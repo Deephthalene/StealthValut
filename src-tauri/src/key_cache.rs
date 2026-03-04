@@ -7,10 +7,13 @@ use std::sync::Mutex;
 
 static DEK_CACHE: Mutex<Option<[u8; 32]>> = Mutex::new(None);
 
+/// 컴파일러 최적화로 제거되지 않는 안전한 메모리 제로아웃
 fn zeroize_key(key: &mut [u8; 32]) {
+    use std::ptr;
     for b in key.iter_mut() {
-        *b = 0;
+        unsafe { ptr::write_volatile(b, 0) };
     }
+    std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
 }
 
 /// 암호화 키 캐시 (unlock 시 저장)
