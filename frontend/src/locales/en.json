@@ -162,7 +162,8 @@
     "vaultUsed": "Vault used",
     "disk": "disk",
     "diskFull": "Disk space full",
-    "limitReached": "Limit reached"
+    "limitReached": "Limit reached",
+    "cleanupDone": "Cleaned up {{count}} unused file(s) ({{freed}} freed)"
   },
   "settings": {
     "title": "Settings",
@@ -246,6 +247,9 @@
   },
   "tray": {
     "open": "Open StealthVault",
-    "quit": "Quit"
+    "quit": "Quit",
+    "uploadInProgress": "Upload in progress",
+    "uploadInProgressDesc": "Files are being uploaded. If you quit, any files still uploading will be deleted.",
+    "quitAnyway": "Quit anyway"
   }
 }

@@ -74,6 +74,11 @@ fn dir_size(path: &Path) -> u64 {
     total
 }
 
+/// 외부 모듈에서 호출 가능한 dir_size 래퍼
+pub fn dir_size_pub(path: &Path) -> u64 {
+    dir_size(path)
+}
+
 /// 금고 경로 기준으로 디스크 전체/여유 + 금고 사용량 계산
 pub fn get_quota_info(vault_path: &Path) -> Result<QuotaInfo, String> {
     let check_path = if vault_path.exists() {

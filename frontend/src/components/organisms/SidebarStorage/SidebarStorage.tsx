@@ -1,6 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { toast } from 'sonner';
 
 interface QuotaResult {
   disk_free_bytes: number;
@@ -40,8 +42,29 @@ export default function SidebarStorage() {
     load();
     const onChanged = () => load();
     window.addEventListener(VAULT_FILES_CHANGED, onChanged);
-    return () => window.removeEventListener(VAULT_FILES_CHANGED, onChanged);
-  }, []);
+
+    // cleanup 완료 이벤트: 토스트 + 용량 갱신
+    const unlistenPromise = listen<{ deleted: number; freed_mb: number }>(
+      'vault-cleanup-done',
+      (event) => {
+        const { deleted, freed_mb } = event.payload;
+        toast.info(
+          t('sidebar.cleanupDone', {
+            count: deleted,
+            freed: freed_mb >= 1024
+              ? `${(freed_mb / 1024).toFixed(2)} GB`
+              : `${freed_mb.toFixed(0)} MB`,
+          }),
+        );
+        load();
+      },
+    );
+
+    return () => {
+      window.removeEventListener(VAULT_FILES_CHANGED, onChanged);
+      unlistenPromise.then((fn) => fn());
+    };
+  }, [t]);
 
   if (!quota) return null;
 

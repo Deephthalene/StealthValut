@@ -9,6 +9,7 @@ import {
 import VideoPlayer from '@/components/organisms/VideoPlayer/VideoPlayer';
 import i18n from '@/i18n';
 import { useVaultFolderStore } from '@/stores/useVaultFolderStore';
+import { useUploadStore } from '@/stores/useUploadStore';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
@@ -438,70 +439,75 @@ function VaultPage() {
             }
           }
           setUploadError('');
-          setUploading(true);
-          setUploadProgress({ current: 0, total: paths.length });
-          let done = 0;
-          const folderIdForUpload = targetFolderId || undefined;
-          const uploadOne = async (p: string) => {
+
+          // 사전 용량 체크
+          (async () => {
             try {
-              await invoke('vault_move_file', {
-                sourcePath: p,
-                folderId: folderIdForUpload,
-              });
-            } catch (err: unknown) {
-              const msg = String(err);
-              if (msg.includes('폴더는 업로드할 수 없습니다')) {
-                await invoke('vault_move_folder', {
-                  sourcePath: p,
-                  folderId: folderIdForUpload,
-                });
-              } else if (msg.includes('찾을 수 없습니다')) {
-                return;
-              } else {
-                throw err;
+              await invoke('precheck_upload_size', { paths });
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              toast.error(msg);
+              setUploadError(msg);
+              uploadingRef.current = false;
+              return;
+            }
+
+            setUploading(true);
+            setUploadProgress({ current: 0, total: paths.length });
+            useUploadStore.getState().startUpload(paths.length);
+            let done = 0;
+            let errors: string[] = [];
+            const folderIdForUpload = targetFolderId || undefined;
+
+            // 순차 업로드 (디스크 I/O 포화 방지)
+            for (const p of paths) {
+              try {
+                try {
+                  await invoke('vault_move_file', {
+                    sourcePath: p,
+                    folderId: folderIdForUpload,
+                  });
+                } catch (err: unknown) {
+                  const msg = String(err);
+                  if (msg.includes('폴더는 업로드할 수 없습니다')) {
+                    await invoke('vault_move_folder', {
+                      sourcePath: p,
+                      folderId: folderIdForUpload,
+                    });
+                  } else if (msg.includes('찾을 수 없습니다')) {
+                    continue;
+                  } else {
+                    throw err;
+                  }
+                }
+                done += 1;
+                setUploadProgress((prev) =>
+                  prev ? { ...prev, current: done } : null,
+                );
+                useUploadStore.getState().updateProgress(done);
+                // 파일 1개 완료 시 즉시 화면 반영
+                load().then(dispatchVaultFilesChanged);
+              } catch (err) {
+                errors.push(
+                  err instanceof Error ? err.message : String(err),
+                );
               }
             }
-            done += 1;
-            setUploadProgress((prev) =>
-              prev ? { ...prev, current: done } : null,
-            );
-          };
 
-          Promise.allSettled(paths.map(uploadOne))
-            .then((results) => {
-              const errors = results
-                .filter(
-                  (r): r is PromiseRejectedResult => r.status === 'rejected',
-                )
-                .map((r) => r.reason);
-              const ok = results.filter((r) => r.status === 'fulfilled').length;
-              const showSuccess = ok > 0;
-              const showError = errors.length > 0;
-              setUploadError(
-                showError
-                  ? errors[0] instanceof Error
-                    ? errors[0].message
-                    : String(errors[0])
-                  : '',
-              );
-              if (showError) {
-                const errMsg =
-                  errors[0] instanceof Error
-                    ? errors[0].message
-                    : errors[0] != null
-                      ? String(errors[0])
-                      : i18n.t('vault.uploadFailed');
-                toast.error(errMsg);
-              }
-              if (showSuccess)
-                toast.success(i18n.t('vault.itemsUploadDone', { count: ok }));
-            })
-            .finally(() => {
-              load().then(dispatchVaultFilesChanged);
-              setUploading(false);
-              setUploadProgress(null);
-              uploadingRef.current = false;
-            });
+            if (errors.length > 0) {
+              setUploadError(errors[0]);
+              toast.error(errors[0]);
+            }
+            if (done > 0) {
+              toast.success(i18n.t('vault.itemsUploadDone', { count: done }));
+            }
+
+            load().then(dispatchVaultFilesChanged);
+            setUploading(false);
+            setUploadProgress(null);
+            useUploadStore.getState().finishUpload();
+            uploadingRef.current = false;
+          })();
         }
       })
       .then((fn) => {
@@ -537,10 +543,15 @@ function VaultPage() {
       });
       if (!selected) return;
       const paths = Array.isArray(selected) ? selected : [selected];
+
+      // 사전 용량 체크
+      await invoke('precheck_upload_size', { paths });
+
       const folderId =
         useVaultFolderStore.getState().selectedFolderId ?? undefined;
       setUploading(true);
       setUploadProgress({ current: 0, total: paths.length });
+      useUploadStore.getState().startUpload(paths.length);
       let done = 0;
       for (const p of paths) {
         await invoke('vault_move_file', {
@@ -549,6 +560,10 @@ function VaultPage() {
         });
         done += 1;
         setUploadProgress({ current: done, total: paths.length });
+        useUploadStore.getState().updateProgress(done);
+        // 파일 1개 완료 시 즉시 화면 반영
+        await load();
+        dispatchVaultFilesChanged();
       }
       toast.success(t('vault.filesUploadDone', { count: paths.length }));
       await load();
@@ -560,6 +575,7 @@ function VaultPage() {
     } finally {
       setUploading(false);
       setUploadProgress(null);
+      useUploadStore.getState().finishUpload();
     }
   };
 
@@ -577,6 +593,7 @@ function VaultPage() {
         useVaultFolderStore.getState().selectedFolderId ?? undefined;
       setUploading(true);
       setUploadProgress(null);
+      useUploadStore.getState().startUpload(1);
       const [fileCount, folderCount] = await invoke<[number, number]>(
         'vault_move_folder',
         {
@@ -594,6 +611,7 @@ function VaultPage() {
     } finally {
       setUploading(false);
       setUploadProgress(null);
+      useUploadStore.getState().finishUpload();
     }
   };
 
@@ -1188,9 +1206,8 @@ function VaultPage() {
       {/* 콘텐츠 그리드 */}
       <div
         ref={scrollParentRef}
-        className={`flex-1 min-h-0 overflow-auto rounded-lg transition-colors relative ${
-          isDragOver ? 'ring-2 ring-primary bg-primary/5' : ''
-        }`}
+        className={`flex-1 min-h-0 overflow-auto rounded-lg transition-colors relative ${isDragOver ? 'ring-2 ring-primary bg-primary/5' : ''
+          }`}
         onScroll={(e) => {
           const el = e.currentTarget;
           const distanceToBottom =
@@ -1212,9 +1229,9 @@ function VaultPage() {
           </div>
         )}
         {loading ||
-        (sortedFolders.length === 0 &&
-          sortedFiles.length === 0 &&
-          !creating) ? (
+          (sortedFolders.length === 0 &&
+            sortedFiles.length === 0 &&
+            !creating) ? (
           <VaultEmptyState
             loading={loading}
             empty={

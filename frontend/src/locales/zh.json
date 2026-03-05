@@ -162,7 +162,8 @@
     "vaultUsed": "保险库使用",
     "disk": "磁盘",
     "diskFull": "磁盘空间不足",
-    "limitReached": "已达限额"
+    "limitReached": "已达限额",
+    "cleanupDone": "已清理{{count}}个未使用文件（释放{{freed}}）"
   },
   "settings": {
     "title": "设置",
@@ -246,6 +247,9 @@
   },
   "tray": {
     "open": "打开 StealthVault",
-    "quit": "退出"
+    "quit": "退出",
+    "uploadInProgress": "上传进行中",
+    "uploadInProgressDesc": "文件正在上传中。退出后，正在上传的文件将被删除。",
+    "quitAnyway": "仍然退出"
   }
 }

@@ -1,4 +1,5 @@
 import i18n from '@/i18n';
+import { useUploadStore } from '@/stores/useUploadStore';
 import { defaultWindowIcon } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
 import { Menu } from '@tauri-apps/api/menu';
@@ -35,7 +36,26 @@ export function useSystemTray() {
             {
               id: 'quit',
               text: i18n.t('tray.quit'),
-              action: () => {
+              action: async () => {
+                // 업로드 중이면 경고
+                if (useUploadStore.getState().isUploading) {
+                  await win.show();
+                  await win.setFocus();
+                  // confirm 다이얼로그를 Tauri dialog로 표시
+                  const { ask } = await import(
+                    '@tauri-apps/plugin-dialog'
+                  );
+                  const confirmed = await ask(
+                    i18n.t('tray.uploadInProgressDesc'),
+                    {
+                      title: i18n.t('tray.uploadInProgress'),
+                      kind: 'warning',
+                      okLabel: i18n.t('tray.quitAnyway'),
+                      cancelLabel: i18n.t('common.cancel'),
+                    },
+                  );
+                  if (!confirmed) return;
+                }
                 invoke('app_exit');
               },
             },

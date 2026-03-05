@@ -332,11 +332,7 @@ pub fn vault_move_file(
             crypto::encrypt_file_chunked(&mut reader, &mut writer, &dek, crypto::CHUNK_SIZE)?;
         }
 
-        secure_delete(&temp_path).map_err(|e| {
-            fs::remove_file(&dest_file).ok();
-            format!("임시 파일 삭제 실패: {}. 암호화된 파일은 저장되었습니다.", e)
-        })?;
-
+        // DB INSERT를 secure_delete보다 먼저 실행 → 파일이 앱에 즉시 나타남
         let original_name_enc = encrypt_field(&original_name, &dek)?;
         let original_path_enc = encrypt_field(&original_path_str, &dek)?;
         let mime_type_enc = encrypt_field(&mime_from_name(&original_name), &dek)?;
@@ -402,6 +398,16 @@ pub fn vault_move_file(
             }
         }
 
+        // secure_delete를 백그라운드 스레드에서 실행 (DB INSERT 완료 후)
+        // 앱 체감 속도 대폭 개선: 1GB 파일 기준 secure_delete 대기 시간 제거
+        let tmp_for_delete = temp_path.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = secure_delete(&tmp_for_delete) {
+                eprintln!("[upload] 백그라운드 secure_delete 실패: {e}. 일반 삭제 시도");
+                let _ = fs::remove_file(&tmp_for_delete);
+            }
+        });
+
         Ok(id)
     };
 
@@ -418,6 +424,79 @@ pub fn vault_move_file(
             Err(e)
         }
     }
+}
+
+/// 앱 시작 시 잔여 .tmp_* 파일 + DB에 없는 고아 .dat 파일 정리
+pub fn cleanup_stale_tmp_files(base: &Path) -> (usize, u64) {
+    let data_path = data_dir(base);
+    if !data_path.exists() {
+        return (0, 0);
+    }
+
+    let mut deleted = 0usize;
+    let mut freed = 0u64;
+
+    // 1) .tmp_* 잔여 파일 삭제
+    if let Ok(entries) = fs::read_dir(&data_path) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with(".tmp_") {
+                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                eprintln!("[cleanup] 잔여 tmp 파일 삭제: {}", name_str);
+                if secure_delete(&entry.path()).is_err() {
+                    let _ = fs::remove_file(entry.path());
+                }
+                deleted += 1;
+                freed += size;
+            }
+        }
+    }
+
+    // 2) DB에 등록되지 않은 미등록 .dat 파일 삭제
+    //    단, 최근 10분 이내 수정된 파일은 업로드 진행 중일 수 있으므로 건너뛰기
+    if let Ok(c) = conn(base) {
+        let mut registered: std::collections::HashSet<String> = std::collections::HashSet::new();
+        if let Ok(mut stmt) = c.prepare("SELECT hash_name FROM files") {
+            if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) {
+                for row in rows.flatten() {
+                    registered.insert(row);
+                }
+            }
+        }
+
+        let now = std::time::SystemTime::now();
+        let grace_period = std::time::Duration::from_secs(600); // 10분
+
+        if let Ok(entries) = fs::read_dir(&data_path) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy().to_string();
+                if name_str.ends_with(".dat") && !registered.contains(&name_str) {
+                    // 최근 수정된 파일은 업로드 진행 중일 수 있으므로 건너뛰기
+                    if let Ok(meta) = entry.metadata() {
+                        if let Ok(modified) = meta.modified() {
+                            if let Ok(elapsed) = now.duration_since(modified) {
+                                if elapsed < grace_period {
+                                    eprintln!("[cleanup] 미등록 dat 파일 건너뛰기 (최근 수정됨): {}", name_str);
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                    let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                    eprintln!("[cleanup] 미등록 dat 파일 삭제: {}", name_str);
+                    if secure_delete(&entry.path()).is_err() {
+                        let _ = fs::remove_file(entry.path());
+                    }
+                    deleted += 1;
+                    freed += size;
+                }
+            }
+        }
+    }
+
+    (deleted, freed)
 }
 
 /// 메모리 버퍼에서 직접 입고 — 임시 복호화 파일 디스크 저장 없음 (ZIP 해제 등용)

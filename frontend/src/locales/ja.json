@@ -162,7 +162,8 @@
     "vaultUsed": "金庫使用量",
     "disk": "ディスク",
     "diskFull": "ディスク容量不足",
-    "limitReached": "制限に達しました"
+    "limitReached": "制限に達しました",
+    "cleanupDone": "未使用ファイル{{count}}件を整理しました（{{freed}}を解放）"
   },
   "settings": {
     "title": "設定",
@@ -246,6 +247,9 @@
   },
   "tray": {
     "open": "StealthVault を開く",
-    "quit": "終了"
+    "quit": "終了",
+    "uploadInProgress": "アップロード中",
+    "uploadInProgressDesc": "ファイルのアップロード中です。終了すると、アップロード中のファイルは削除されます。",
+    "quitAnyway": "それでも終了"
   }
 }

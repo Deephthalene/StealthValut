@@ -162,12 +162,23 @@ fn vault_verify(password: String) -> Result<bool, String> {
     vault::vault_verify(&vault_base_path(), &password)
 }
 
-/// unlock 시 DEK 캐시 (파일 암호화용) + 1회 백필
+/// unlock 시 DEK 캐시 (파일 암호화용) + 1회 백필 + tmp 정리
 #[tauri::command]
-fn vault_cache_key(password: String) -> Result<(), String> {
+fn vault_cache_key(app: tauri::AppHandle, password: String) -> Result<(), String> {
+    use tauri::Emitter;
     vault::vault_cache_key(&vault_base_path(), &password)?;
     let base = vault_base_path();
     std::thread::spawn(move || {
+        // 이전 crash/강제종료로 남은 .tmp_* + 고아 .dat 파일 정리
+        let (deleted, freed) = vault_files::cleanup_stale_tmp_files(&base);
+        if deleted > 0 {
+            let freed_mb = freed as f64 / (1024.0 * 1024.0);
+            let payload = serde_json::json!({
+                "deleted": deleted,
+                "freed_mb": (freed_mb * 100.0).round() / 100.0,
+            });
+            let _ = app.emit("vault-cleanup-done", payload);
+        }
         let _ = vault_files::backfill_files_index(&base);
     });
     Ok(())
@@ -288,6 +299,47 @@ fn check_free_tier_quota(base: &std::path::Path) -> Result<(), String> {
             return Err(format!(
                 "무료 플랜의 저장 한도({} GB)에 도달했습니다. 프리미엄으로 업그레이드하세요.",
                 FREE_TIER_GB
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// 업로드 전 용량 사전 체크 (파일 경로 목록을 받아 크기 합산 후 검증)
+#[tauri::command]
+fn precheck_upload_size(paths: Vec<String>) -> Result<(), String> {
+    let base = vault_base_path();
+    let is_premium = license::load_license(&base).ok().flatten().is_some();
+    let info = quota::get_quota_info(&base)?;
+
+    let mut total_bytes: u64 = 0;
+    for p in &paths {
+        let path = parse_file_path(p);
+        if let Ok(meta) = std::fs::metadata(&path) {
+            if meta.is_file() {
+                total_bytes += meta.len();
+            } else if meta.is_dir() {
+                total_bytes += quota::dir_size_pub(&path);
+            }
+        }
+    }
+
+    if is_premium {
+        if total_bytes > info.disk_free_bytes {
+            return Err(format!(
+                "디스크 여유 공간({:.1} GB)이 부족합니다. 업로드하려는 파일 크기: {:.1} GB",
+                info.disk_free_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
+                total_bytes as f64 / (1024.0 * 1024.0 * 1024.0)
+            ));
+        }
+    } else {
+        let limit_bytes = FREE_TIER_GB * 1024 * 1024 * 1024;
+        if info.vault_used_bytes + total_bytes > limit_bytes {
+            let remaining = limit_bytes.saturating_sub(info.vault_used_bytes);
+            return Err(format!(
+                "무료 플랜의 저장 한도({} GB)를 초과합니다. 남은 용량: {:.2} GB",
+                FREE_TIER_GB,
+                remaining as f64 / (1024.0 * 1024.0 * 1024.0)
             ));
         }
     }
@@ -649,7 +701,8 @@ pub fn run() {
             change_vault_location,
             verify_and_activate_license,
             get_license_status,
-            send_purchase_request
+            send_purchase_request,
+            precheck_upload_size
         ])
         .run(tauri::generate_context!())
         .expect("StealthVault 실행 실패");

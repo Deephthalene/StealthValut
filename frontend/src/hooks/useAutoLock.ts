@@ -1,4 +1,5 @@
 import { useSettingsStore } from '@/stores/useSettingsStore';
+import { useUploadStore } from '@/stores/useUploadStore';
 import { useVaultStore } from '@/stores/useVaultStore';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useCallback, useEffect, useRef } from 'react';
@@ -24,7 +25,14 @@ export function useAutoLock() {
     lastActivityRef.current = Date.now();
     if (timerRef.current) clearTimeout(timerRef.current);
     if (!isUnlocked) return;
-    timerRef.current = setTimeout(() => lock(), timeoutMs);
+    timerRef.current = setTimeout(() => {
+      // 업로드 중이면 자동잠금 건너뛰고 타이머 재설정
+      if (useUploadStore.getState().isUploading) {
+        resetTimer();
+        return;
+      }
+      lock();
+    }, timeoutMs);
   }, [isUnlocked, timeoutMs, lock]);
 
   useEffect(() => {
@@ -45,7 +53,10 @@ export function useAutoLock() {
       if (document.visibilityState === 'visible') {
         const elapsed = Date.now() - lastActivityRef.current;
         if (elapsed >= timeoutMs) {
-          lock();
+          // 업로드 중이면 잠금 건너뛰기
+          if (!useUploadStore.getState().isUploading) {
+            lock();
+          }
         } else {
           if (timerRef.current) clearTimeout(timerRef.current);
           timerRef.current = setTimeout(() => lock(), timeoutMs - elapsed);
