@@ -296,20 +296,29 @@ fn check_free_tier_quota(base: &std::path::Path) -> Result<(), String> {
 
 /// 파일 이동+암호화 (원본 삭제)
 #[tauri::command]
-fn vault_move_file(source_path: String, folder_id: Option<String>) -> Result<String, String> {
+async fn vault_move_file(source_path: String, folder_id: Option<String>) -> Result<String, String> {
     let base = vault_base_path();
     check_free_tier_quota(&base)?;
     let path = parse_file_path(&source_path);
-    vault_files::vault_move_file(&base, path.as_path(), folder_id.as_deref())
+    // 무거운 작업이므로 tokio 런타임의 블로킹 스레드풀에서 실행 (메인스레드 프리징 방지)
+    tokio::task::spawn_blocking(move || {
+        vault_files::vault_move_file(&base, path.as_path(), folder_id.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// 폴더 업로드 (재귀)
 #[tauri::command]
-fn vault_move_folder(source_path: String, folder_id: Option<String>) -> Result<(usize, usize), String> {
+async fn vault_move_folder(source_path: String, folder_id: Option<String>) -> Result<(usize, usize), String> {
     let base = vault_base_path();
     check_free_tier_quota(&base)?;
     let path = parse_file_path(&source_path);
-    vault_files::vault_move_folder(&base, path.as_path(), folder_id.as_deref())
+    tokio::task::spawn_blocking(move || {
+        vault_files::vault_move_folder(&base, path.as_path(), folder_id.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// 파일 삭제 (금고에서 영구 제거)
@@ -332,12 +341,17 @@ fn vault_change_folder(file_id: String, folder_id: Option<String>) -> Result<(),
 
 /// 압축 해제 (금고 내)
 #[tauri::command]
-fn vault_extract_archive(file_id: String, folder_id: Option<String>) -> Result<(usize, usize), String> {
-    vault_files::vault_extract_archive(
-        &vault_base_path(),
-        &file_id,
-        folder_id.as_deref(),
-    )
+async fn vault_extract_archive(file_id: String, folder_id: Option<String>) -> Result<(usize, usize), String> {
+    let base = vault_base_path();
+    tokio::task::spawn_blocking(move || {
+        vault_files::vault_extract_archive(
+            &base,
+            &file_id,
+            folder_id.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// 썸네일 없을 때 on-demand 생성
@@ -375,32 +389,50 @@ fn list_files_paged(
 
 /// 파일 출고 (복호화 → 저장 → 금고에서 삭제)
 #[tauri::command]
-fn vault_extract_file(file_id: String, dest_path: String) -> Result<(), String> {
-    vault_files::vault_extract_file(
-        &vault_base_path(),
-        &file_id,
-        PathBuf::from(&dest_path).as_path(),
-    )
+async fn vault_extract_file(file_id: String, dest_path: String) -> Result<(), String> {
+    let base = vault_base_path();
+    let dest = PathBuf::from(&dest_path);
+    tokio::task::spawn_blocking(move || {
+        vault_files::vault_extract_file(
+            &base,
+            &file_id,
+            dest.as_path(),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// 폴더 내보내기 (재귀)
 #[tauri::command]
-fn vault_extract_folder(folder_id: String, dest_path: String) -> Result<(usize, usize), String> {
-    vault_files::vault_extract_folder(
-        &vault_base_path(),
-        &folder_id,
-        PathBuf::from(&dest_path).as_path(),
-    )
+async fn vault_extract_folder(folder_id: String, dest_path: String) -> Result<(usize, usize), String> {
+    let base = vault_base_path();
+    let dest = PathBuf::from(&dest_path);
+    tokio::task::spawn_blocking(move || {
+        vault_files::vault_extract_folder(
+            &base,
+            &folder_id,
+            dest.as_path(),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// 파일 복사 내보내기 (금고에서 삭제하지 않음)
 #[tauri::command]
-fn vault_copy_out(file_id: String, dest_path: String) -> Result<(), String> {
-    vault_files::vault_copy_out(
-        &vault_base_path(),
-        &file_id,
-        PathBuf::from(&dest_path).as_path(),
-    )
+async fn vault_copy_out(file_id: String, dest_path: String) -> Result<(), String> {
+    let base = vault_base_path();
+    let dest = PathBuf::from(&dest_path);
+    tokio::task::spawn_blocking(move || {
+        vault_files::vault_copy_out(
+            &base,
+            &file_id,
+            dest.as_path(),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 
